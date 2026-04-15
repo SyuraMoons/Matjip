@@ -175,33 +175,22 @@ export default function Map() {
 
     const VISITED_RADIUS_METERS = 100;
 
-    // Clip the streets pane to circles at the user's location and every
-    // memory, so the labelled Voyager tiles are only visible inside
-    // each visited radius. Uses an SVG path() so multiple circles can be
-    // combined in a single clip-path.
-    function circleSubpath(lat: number, lng: number): string {
-      const pt = map.latLngToLayerPoint(L.latLng(lat, lng));
-      const metersPerPixel =
-        (40075016.686 * Math.abs(Math.cos((lat * Math.PI) / 180))) /
-        Math.pow(2, map.getZoom() + 8);
-      const r = VISITED_RADIUS_METERS / metersPerPixel;
-      return `M ${pt.x + r} ${pt.y} a ${r} ${r} 0 1 0 ${-2 * r} 0 a ${r} ${r} 0 1 0 ${2 * r} 0 Z`;
-    }
-
+    // Clip the streets pane to a circle at the user's location so the
+    // labelled Voyager tiles are only visible inside the visited radius.
     function updateStreetsMask() {
       const pane = streetsPaneRef.current;
       if (!pane) return;
-      const subpaths: string[] = [];
       const loc = userLocationRef.current;
-      if (loc) subpaths.push(circleSubpath(loc.lat, loc.lng));
-      SAMPLE_MEMORIES.forEach((m) =>
-        subpaths.push(circleSubpath(m.lat, m.lng))
-      );
-      if (subpaths.length === 0) {
+      if (!loc) {
         pane.style.clipPath = "circle(0px at 0px 0px)";
         return;
       }
-      pane.style.clipPath = `path('${subpaths.join(" ")}')`;
+      const pt = map.latLngToLayerPoint(loc);
+      const metersPerPixel =
+        (40075016.686 * Math.abs(Math.cos((loc.lat * Math.PI) / 180))) /
+        Math.pow(2, map.getZoom() + 8);
+      const radiusPx = VISITED_RADIUS_METERS / metersPerPixel;
+      pane.style.clipPath = `circle(${radiusPx}px at ${pt.x}px ${pt.y}px)`;
     }
     map.on("move zoom viewreset zoomend moveend", updateStreetsMask);
     updateStreetsMask();
@@ -273,8 +262,6 @@ export default function Map() {
 
     // Memory markers
     SAMPLE_MEMORIES.forEach((memory) => {
-      addVisitedArea(memory.lat, memory.lng);
-
       const marker = L.marker([memory.lat, memory.lng], {
         icon: createMemoryIcon(memory.emoji),
       }).addTo(map);

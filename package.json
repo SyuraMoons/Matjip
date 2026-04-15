@@ -9,8 +9,10 @@
     "lint": "eslint"
   },
   "dependencies": {
+    "@mapbox/geojson-area": "^0.2.2",
     "leaflet": "^1.9.4",
     "next": "16.2.3",
+    "node-fetch": "^3.3.2",
     "react": "19.2.4",
     "react-dom": "19.2.4"
   },
