@@ -1,0 +1,52 @@
+[
+  {
+    "id": 1,
+    "title": "Sunrise at Angkor Wat",
+    "date": "March 12, 2024",
+    "location": "Siem Reap, Cambodia",
+    "lat": 13.4125,
+    "lng": 103.867,
+    "excerpt": "Watched the sun rise over the ancient spires, mist rolling across the moat...",
+    "emoji": "🌅"
+  },
+  {
+    "id": 2,
+    "title": "Lost in the Medina",
+    "date": "October 3, 2023",
+    "location": "Fez, Morocco",
+    "lat": 34.0583,
+    "lng": -4.9998,
+    "excerpt": "Turned down a spice alley and found the most incredible blue-tiled courtyard...",
+    "emoji": "🧭"
+  },
+  {
+    "id": 3,
+    "title": "Northern Lights",
+    "date": "January 19, 2024",
+    "location": "Tromsø, Norway",
+    "lat": 69.6496,
+    "lng": 18.9553,
+    "excerpt": "Standing in -12°C, jaw dropped. Green and violet ribbons across the whole sky.",
+    "emoji": "🌌"
+  },
+  {
+    "id": 4,
+    "title": "Street Food Night Market",
+    "date": "August 7, 2023",
+    "location": "Bangkok, Thailand",
+    "lat": 13.7563,
+    "lng": 100.5018,
+    "excerpt": "Pad kra pao at 11pm, the wok still smoking. The best meal of my life.",
+    "emoji": "🍜"
+  },
+  {
+    "id": 5,
+    "title": "Cliffside Monastery",
+    "date": "May 22, 2024",
+    "location": "Meteora, Greece",
+    "lat": 39.7217,
+    "lng": 21.6307,
+    "excerpt": "Hiked up in the early morning before the tourists arrived. Pure silence.",
+    "emoji": "⛪"
+  }
+]
