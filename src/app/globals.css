@@ -46,3 +46,9 @@ body {
 .memory-popup .leaflet-popup-tip-container {
   display: none;
 }
+
+/* Blend globe tiles with the parchment map background:
+   multiply keeps the blue oceans blue while tinting pale land parchment. */
+.globe-tiles {
+  mix-blend-mode: multiply;
+}
