@@ -1,10 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useAppKitAccount } from "@reown/appkit/react";
+import type { Address } from "viem";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import AddMemoryModal from "./AddMemoryModal";
 import type { MemoryData } from "./AddMemoryModal";
+import {
+  decentralizedMemoryToMapMemory,
+  loadDecentralizedMemories,
+} from "@/lib/decentralizedMemories";
 
 // Fix default marker icons broken by webpack
 delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
@@ -92,10 +98,16 @@ function createMemoryIcon() {
   });
 }
 
-function createMemoryPopupContent(
-  memory: MemoryData,
-  onReadMore: (memory: MemoryData) => void
-) {
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function createMemoryPopupContent(memory: MemoryData) {
   // Truncate title to 25 characters
   const titleText = memory.title || "Untitled";
   const isTitleLong = titleText.length > 25;
@@ -107,6 +119,7 @@ function createMemoryPopupContent(
   const truncatedCaption = isCaptionLong
     ? captionText.substring(0, 80) + "..."
     : captionText;
+  const locationText = memory.location || "Unknown Location";
 
   const photosHtml =
     memory.photos.length > 0
@@ -116,7 +129,7 @@ function createMemoryPopupContent(
         .slice(0, 2)
         .map(
           (photo) => `
-        <img src="${photo}" style="
+        <img src="${escapeHtml(photo)}" style="
           width: 70px;
           height: 70px;
           object-fit: cover;
@@ -146,14 +159,14 @@ function createMemoryPopupContent(
       ${photosHtml ? `<div style="flex-shrink: 0;">${photosHtml}</div>` : ""}
       <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: space-between;">
         <div>
-          <div style="font-size: 20px; line-height: 1; margin-bottom: 5px;">${memory.emoji}</div>
-          <div style="font-size: 13px; font-weight: 700; color: #f9fafb; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${titleText}">${truncatedTitle}</div>
+          <div style="font-size: 20px; line-height: 1; margin-bottom: 5px;">${escapeHtml(memory.emoji)}</div>
+          <div style="font-size: 13px; font-weight: 700; color: #f9fafb; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(titleText)}">${escapeHtml(truncatedTitle)}</div>
           <div style="font-size: 10px; color: rgba(139, 92, 246, 0.85); margin-bottom: 6px; letter-spacing: 0.04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-            📍 ${memory.location.substring(0, 20)}${memory.location.length > 20 ? "..." : ""} · ${memory.date}
+            📍 ${escapeHtml(locationText.substring(0, 20))}${locationText.length > 20 ? "..." : ""} · ${escapeHtml(memory.date)}
           </div>
         </div>
         <div style="font-size: 11px; color: #9ca3af; line-height: 1.4; word-break: break-word;">
-          ${truncatedCaption}
+          ${escapeHtml(truncatedCaption)}
         </div>
       </div>
     </div>
@@ -264,9 +277,11 @@ function MemoryDetailModal({
         >
           {memory.photos && memory.photos.length > 0 ? (
             memory.photos.map((photo, idx) => (
+              // eslint-disable-next-line @next/next/no-img-element
               <img
                 key={idx}
                 src={photo}
+                alt={`${memory.title} photo ${idx + 1}`}
                 style={{
                   width: "100%",
                   height: "140px",
@@ -364,10 +379,22 @@ export default function Map({
   const userMarkerRef = useRef<L.Marker | null>(null);
   const userLocationRef = useRef<L.LatLng | null>(null);
   const streetsPaneRef = useRef<HTMLElement | null>(null);
+  const updateStreetsMaskRef = useRef<() => void>(() => {});
+  const memoryVisitedAreasRef = useRef<L.LayerGroup | null>(null);
+  const addVisitedAreaRef = useRef<(lat: number, lng: number) => void>(
+    () => {}
+  );
+  const { address, isConnected } = useAppKitAccount({ namespace: "eip155" });
 
   const [memories, setMemories] = useState<MemoryData[]>(INITIAL_SAMPLE_MEMORIES);
   const [selectedMemory, setSelectedMemory] = useState<MemoryData | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
+  const [memoryLoadError, setMemoryLoadError] = useState("");
+  const [isLoadingMemories, setIsLoadingMemories] = useState(false);
+  const [currentLocation, setCurrentLocation] = useState<{
+    lat: number;
+    lng: number;
+  }>();
   const memoriesRef = useRef<MemoryData[]>(INITIAL_SAMPLE_MEMORIES);
 
   // Keep memoriesRef in sync with memories state
@@ -380,7 +407,7 @@ export default function Map({
       icon: createMemoryIcon(),
     }).addTo(map);
 
-    marker.bindPopup(createMemoryPopupContent(memory, (m) => {}), {
+    marker.bindPopup(createMemoryPopupContent(memory), {
       className: "memory-popup",
       maxWidth: 300,
     });
@@ -471,6 +498,7 @@ export default function Map({
     visitedPane.style.pointerEvents = "none";
     visitedPane.style.willChange = "transform";
     visitedPane.style.backfaceVisibility = "hidden";
+    memoryVisitedAreasRef.current = L.layerGroup().addTo(map);
 
     const VISITED_RADIUS_METERS = 100;
     let updateFrameId: number | null = null;
@@ -494,7 +522,7 @@ export default function Map({
       const subpaths: string[] = [];
       const loc = userLocationRef.current;
       if (loc) subpaths.push(circleSubpath(loc.lat, loc.lng));
-      INITIAL_SAMPLE_MEMORIES.forEach((m) =>
+      memoriesRef.current.forEach((m) =>
         subpaths.push(circleSubpath(m.lat, m.lng))
       );
       if (subpaths.length === 0) {
@@ -526,7 +554,7 @@ export default function Map({
     updateStreetsMask();
 
     function addVisitedArea(lat: number, lng: number) {
-      L.circle([lat, lng], {
+      const circle = L.circle([lat, lng], {
         pane: "visitedPane",
         radius: VISITED_RADIUS_METERS,
         stroke: true,
@@ -535,8 +563,13 @@ export default function Map({
         dashArray: "5, 5",
         fillColor: "rgba(234, 179, 8, 0.25)",
         fillOpacity: 0.25,
-      }).addTo(map);
+      });
+
+      memoryVisitedAreasRef.current?.addLayer(circle);
     }
+
+    updateStreetsMaskRef.current = updateStreetsMask;
+    addVisitedAreaRef.current = addVisitedArea;
 
     // Geolocation: center + visited circle + marker
     if (navigator.geolocation) {
@@ -544,6 +577,7 @@ export default function Map({
         (pos) => {
           const { latitude, longitude } = pos.coords;
           userLocationRef.current = L.latLng(latitude, longitude);
+          setCurrentLocation({ lat: latitude, lng: longitude });
           
           // Ensure map is ready and has proper dimensions before setView
           if (!mapInstanceRef.current) return;
@@ -558,7 +592,16 @@ export default function Map({
               if (mapInstanceRef.current && container.offsetWidth > 0) {
                 mapInstanceRef.current.invalidateSize();
                 mapInstanceRef.current.setView([latitude, longitude], 13, { animate: true });
-                addVisitedArea(latitude, longitude);
+                L.circle([latitude, longitude], {
+                  pane: "visitedPane",
+                  radius: VISITED_RADIUS_METERS,
+                  stroke: true,
+                  color: "rgba(234, 179, 8, 0.5)",
+                  weight: 2,
+                  dashArray: "5, 5",
+                  fillColor: "rgba(234, 179, 8, 0.25)",
+                  fillOpacity: 0.25,
+                }).addTo(map);
                 updateStreetsMask();
               }
             });
@@ -569,7 +612,16 @@ export default function Map({
           map.invalidateSize();
           map.setView([latitude, longitude], 13, { animate: true });
           
-          addVisitedArea(latitude, longitude);
+          L.circle([latitude, longitude], {
+            pane: "visitedPane",
+            radius: VISITED_RADIUS_METERS,
+            stroke: true,
+            color: "rgba(234, 179, 8, 0.5)",
+            weight: 2,
+            dashArray: "5, 5",
+            fillColor: "rgba(234, 179, 8, 0.25)",
+            fillOpacity: 0.25,
+          }).addTo(map);
           updateStreetsMask();
 
           const youAreHereIcon = L.divIcon({
@@ -620,40 +672,6 @@ export default function Map({
       );
     }
 
-    // Memory markers - add only when map is ready
-    map.whenReady(() => {
-      INITIAL_SAMPLE_MEMORIES.forEach((memory) => {
-        addVisitedArea(memory.lat, memory.lng);
-
-        const marker = L.marker([memory.lat, memory.lng], {
-          icon: createMemoryIcon(),
-        }).addTo(map);
-
-        marker.bindPopup(
-          `<div style="
-            background: rgba(17, 24, 39, 0.97);
-            border: 1px solid rgba(139, 92, 246, 0.4);
-            border-radius: 12px;
-            padding: 14px 16px;
-            min-width: 220px;
-            font-family: inherit;
-            box-shadow: 0 0 20px rgba(139, 92, 246, 0.15);
-          ">
-            <div style="font-size: 22px; margin-bottom: 6px;">${memory.emoji}</div>
-            <div style="font-size: 15px; font-weight: 700; color: #f9fafb; margin-bottom: 2px;">${memory.title}</div>
-            <div style="font-size: 11px; color: rgba(139, 92, 246, 0.9); margin-bottom: 8px; letter-spacing: 0.05em;">
-              📍 ${memory.location} &nbsp;·&nbsp; ${memory.date}
-            </div>
-            <div style="font-size: 12px; color: #9ca3af; line-height: 1.5;">${memory.caption}</div>
-          </div>`,
-          {
-            className: "memory-popup",
-            maxWidth: 280,
-          }
-        );
-      });
-    });
-
     return () => {
       if (updateFrameId !== null) {
         cancelAnimationFrame(updateFrameId);
@@ -664,6 +682,51 @@ export default function Map({
       }
     };
   }, []);
+
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function loadWalletMemories() {
+      if (!address || !isConnected) {
+        setMemoryLoadError("");
+        setIsLoadingMemories(false);
+        setMemories(INITIAL_SAMPLE_MEMORIES);
+        return;
+      }
+
+      setIsLoadingMemories(true);
+      setMemoryLoadError("");
+
+      try {
+        const decentralizedMemories = await loadDecentralizedMemories({
+          poster: address as Address,
+        });
+
+        if (!isCancelled) {
+          setMemories(decentralizedMemories.map(decentralizedMemoryToMapMemory));
+        }
+      } catch (error) {
+        if (!isCancelled) {
+          setMemories([]);
+          setMemoryLoadError(
+            error instanceof Error
+              ? error.message
+              : "Unable to load decentralized memories"
+          );
+        }
+      } finally {
+        if (!isCancelled) {
+          setIsLoadingMemories(false);
+        }
+      }
+    }
+
+    loadWalletMemories();
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [address, isConnected]);
 
   // Update markers when memories change
   useEffect(() => {
@@ -678,12 +741,17 @@ export default function Map({
       }
     });
 
-    // Add all current memories as markers
-    memories.forEach((memory) => addMemoryMarker(memory, map));
+    memoryVisitedAreasRef.current?.clearLayers();
+    memories.forEach((memory) => {
+      addMemoryMarker(memory, map);
+      addVisitedAreaRef.current(memory.lat, memory.lng);
+    });
+    updateStreetsMaskRef.current();
   }, [memories]);
 
   const handleSaveMemory = (memory: MemoryData) => {
     setMemories((prev) => [...prev, memory]);
+    requestAnimationFrame(() => updateStreetsMaskRef.current());
   };
 
   return (
@@ -700,13 +768,26 @@ export default function Map({
         style={{ width: "100%", height: "100%", minHeight: "100vh" }}
       />
 
+      {(isLoadingMemories || memoryLoadError || (isConnected && memories.length === 0)) && (
+        <div className="absolute left-6 bottom-8 z-[1000] max-w-xs rounded-lg border border-purple-500/30 bg-gray-950/90 px-4 py-3 text-sm text-gray-200 shadow-lg shadow-purple-950/30">
+          {isLoadingMemories && "Loading your onchain memories..."}
+          {memoryLoadError && (
+            <span className="text-amber-300">
+              Unable to load memories: {memoryLoadError}
+            </span>
+          )}
+          {!isLoadingMemories && !memoryLoadError && isConnected && memories.length === 0 && (
+            "No memories found for this wallet yet."
+          )}
+        </div>
+      )}
+
       {/* Add Memory Modal */}
       <AddMemoryModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onSave={handleSaveMemory}
-        map={mapInstanceRef.current}
-        currentLocation={userLocationRef.current ? { lat: userLocationRef.current.lat, lng: userLocationRef.current.lng } : undefined}
+        currentLocation={currentLocation}
       />
 
       {/* Memory Detail Modal */}

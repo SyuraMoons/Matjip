@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import MapWrapper from "@/components/MapWrapper";
+import WalletStatus from "@/components/WalletStatus";
 
 export default function Home() {
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -12,7 +13,7 @@ export default function Home() {
       <MapWrapper isModalOpen={isModalOpen} setIsModalOpen={setIsModalOpen} />
 
       {/* Header overlay */}
-      <div className="absolute top-0 left-0 right-0 z-[1000] flex items-center justify-between px-6 py-4 bg-gradient-to-b from-gray-950/90 to-transparent pointer-events-none">
+      <div className="absolute top-0 left-0 right-0 z-[1000] flex items-start justify-between gap-4 px-6 py-4 bg-gradient-to-b from-gray-950/90 to-transparent pointer-events-none">
         <div>
           <h1 className="text-white text-xl font-bold tracking-tight">
             matjib
@@ -21,17 +22,20 @@ export default function Home() {
             Your world, mapped in memories
           </p>
         </div>
-        <button
-          onClick={() => setIsModalOpen(true)}
-          className="pointer-events-auto bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium px-4 py-2 rounded-full transition-colors shadow-lg shadow-purple-900/50"
-        >
-          + Add Memory
-        </button>
+        <div className="flex flex-col items-end gap-3">
+          <WalletStatus />
+          <button
+            onClick={() => setIsModalOpen(true)}
+            className="pointer-events-auto bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium px-4 py-2 rounded-full transition-colors shadow-lg shadow-purple-900/50"
+          >
+            + Add Memory
+          </button>
+        </div>
       </div>
 
-      {/* Memory count badge */}
+      {/* Persistence badge */}
       <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-[1000] bg-gray-900/90 border border-purple-500/30 text-purple-300 text-xs px-4 py-2 rounded-full tracking-wide shadow-lg shadow-purple-900/20 pointer-events-none">
-        5 memories across 5 countries
+        Onchain memories with IPFS metadata
       </div>
     </div>
   );

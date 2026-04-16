@@ -1,7 +1,15 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
+import { waitForTransactionReceipt } from "@wagmi/core";
+import { useAppKitAccount, useAppKitNetwork } from "@reown/appkit/react";
 import L from "leaflet";
+import { useWriteContract } from "wagmi";
+import type { Hash } from "viem";
+import { ipfsToGatewayUrl } from "@/lib/ipfs";
+import { STATUS_HOODI_CHAIN_ID, wagmiConfig } from "@/lib/wallet/config";
+import { memoryRegistryContract } from "@/lib/wallet/memoryRegistry";
+import { estimateCreateMemoryGas } from "@/lib/wallet/statusGas";
 
 export type MemoryData = {
   id: number;
@@ -11,52 +19,56 @@ export type MemoryData = {
   location: string;
   lat: number;
   lng: number;
-  photos: string[]; // Base64 encoded photos
+  photos: string[];
   emoji: string;
+  metadataCid?: string;
+  metadataHash?: `0x${string}`;
+  txHash?: Hash;
+};
+
+type KarmaInfo = {
+  karmaBalance: string;
+  gaslessEligible: boolean;
+};
+
+type UploadedMemory = {
+  imageCids: string[];
+  metadataCid: string;
+  metadataHash: `0x${string}`;
+  latE6: number;
+  lngE6: number;
+  contractArgs: {
+    metadataCid: string;
+    metadataHash: `0x${string}`;
+    latE6: number;
+    lngE6: number;
+  };
 };
 
 type AddMemoryModalProps = {
   isOpen: boolean;
   onClose: () => void;
   onSave: (memory: MemoryData) => void;
-  map: L.Map | null;
   currentLocation?: { lat: number; lng: number };
 };
 
-const EMOJI_SUGGESTIONS = [
-  "📍",
-  "🌅",
-  "🌆",
-  "🏔️",
-  "🏖️",
-  "🗻",
-  "🎭",
-  "🍜",
-  "🎪",
-  "🌃",
-  "✈️",
-  "🚀",
-  "⛪",
-  "🕌",
-  "🏯",
-  "🗼",
-  "🌲",
-  "🌴",
-  "🐘",
-  "🦁",
-];
+type SubmitStep = "idle" | "karma" | "uploading" | "wallet" | "confirming" | "saved";
 
 export default function AddMemoryModal({
   isOpen,
   onClose,
   onSave,
-  map,
   currentLocation,
 }: AddMemoryModalProps) {
+  const { address, isConnected } = useAppKitAccount({ namespace: "eip155" });
+  const { chainId } = useAppKitNetwork();
+  const { writeContractAsync } = useWriteContract();
+
   const [step, setStep] = useState<"photos" | "details" | "location">(
     "photos"
   );
   const [photos, setPhotos] = useState<string[]>([]);
+  const [photoFiles, setPhotoFiles] = useState<File[]>([]);
   const [title, setTitle] = useState("");
   const [caption, setCaption] = useState("");
   const [selectedEmoji] = useState("");
@@ -65,6 +77,11 @@ export default function AddMemoryModal({
     lng: number;
   } | null>(currentLocation || null);
   const [manualLocation, setManualLocation] = useState("");
+  const [submitStep, setSubmitStep] = useState<SubmitStep>("idle");
+  const [submitError, setSubmitError] = useState("");
+  const [uploadedMemory, setUploadedMemory] = useState<UploadedMemory | null>(
+    null
+  );
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragRef = useRef<HTMLDivElement>(null);
@@ -72,21 +89,25 @@ export default function AddMemoryModal({
   const mapInstanceRef = useRef<L.Map | null>(null);
 
   const handlePhotoSelect = useCallback((files: FileList) => {
-    const newPhotos: string[] = [];
+    const imageFiles = Array.from(files).filter((file) =>
+      file.type.startsWith("image/")
+    );
 
-    Array.from(files).forEach((file) => {
-      if (file.type.startsWith("image/")) {
-        const reader = new FileReader();
-        reader.onload = (e) => {
-          if (e.target?.result) {
-            newPhotos.push(e.target.result as string);
-            if (newPhotos.length === files.length) {
-              setPhotos((prev) => [...prev, ...newPhotos]);
-            }
-          }
-        };
-        reader.readAsDataURL(file);
-      }
+    if (imageFiles.length === 0) {
+      return;
+    }
+
+    setUploadedMemory(null);
+    setPhotoFiles((prev) => [...prev, ...imageFiles]);
+
+    imageFiles.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        if (event.target?.result) {
+          setPhotos((prev) => [...prev, event.target?.result as string]);
+        }
+      };
+      reader.readAsDataURL(file);
     });
   }, []);
 
@@ -111,7 +132,9 @@ export default function AddMemoryModal({
   );
 
   const removePhoto = (index: number) => {
+    setUploadedMemory(null);
     setPhotos((prev) => prev.filter((_, i) => i !== index));
+    setPhotoFiles((prev) => prev.filter((_, i) => i !== index));
   };
 
   // Auto-initialize map when location step is reached
@@ -122,6 +145,8 @@ export default function AddMemoryModal({
         initMapPicker();
       }, 100);
     }
+    // Leaflet map initialization is intentionally one-shot per modal session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
   const initMapPicker = () => {
@@ -167,6 +192,7 @@ export default function AddMemoryModal({
 
     // Click to select location
     const onMapClick = (e: L.LeafletMouseEvent) => {
+      setUploadedMemory(null);
       setLocationCoords({ lat: e.latlng.lat, lng: e.latlng.lng });
       // Update marker
       pickerMap.eachLayer((layer) => {
@@ -191,46 +217,159 @@ export default function AddMemoryModal({
     pickerMap.on("click", onMapClick);
   };
 
-  const handleSave = () => {
-    if (!title || !locationCoords || photos.length === 0) {
-      alert("Please fill in all fields and add at least one photo");
-      return;
+  const assertCanSubmit = async () => {
+    if (!title || !locationCoords || photoFiles.length === 0) {
+      throw new Error("Please fill in all fields and add at least one photo");
     }
 
-    const newMemory: MemoryData = {
-      id: Date.now(),
-      title,
-      caption,
-      date: new Date().toLocaleDateString("en-US", {
-        month: "long",
-        day: "numeric",
-        year: "numeric",
-      }),
-      location: manualLocation || "Unknown Location",
-      lat: locationCoords.lat,
-      lng: locationCoords.lng,
-      photos,
-      emoji: selectedEmoji,
-    };
+    if (!isConnected || !address) {
+      throw new Error("Connect your wallet before adding a memory");
+    }
 
-    onSave(newMemory);
-    resetForm();
-    onClose();
+    if (Number(chainId) !== STATUS_HOODI_CHAIN_ID) {
+      throw new Error("Switch to Status Network Hoodi before adding a memory");
+    }
+
+    setSubmitStep("karma");
+    const response = await fetch(`/api/karma/${address}`);
+    const karmaInfo = (await response.json()) as KarmaInfo & { error?: string };
+
+    if (!response.ok) {
+      throw new Error(karmaInfo.error || "Unable to check Karma");
+    }
+
+    if (!karmaInfo.gaslessEligible || BigInt(karmaInfo.karmaBalance) <= BigInt(0)) {
+      throw new Error("You need Karma on this wallet to add a memory");
+    }
+  };
+
+  const uploadMemory = async () => {
+    if (uploadedMemory) {
+      return uploadedMemory;
+    }
+
+    if (!locationCoords) {
+      throw new Error("Choose a location before uploading");
+    }
+
+    setSubmitStep("uploading");
+    const formData = new FormData();
+    formData.append("title", title);
+    formData.append("description", caption);
+    formData.append("locationName", manualLocation);
+    formData.append("lat", String(locationCoords.lat));
+    formData.append("lng", String(locationCoords.lng));
+    photoFiles.forEach((file) => formData.append("photos", file));
+
+    const response = await fetch("/api/memories/upload", {
+      method: "POST",
+      body: formData,
+    });
+    const payload = (await response.json()) as UploadedMemory & { error?: string };
+
+    if (!response.ok) {
+      throw new Error(payload.error || "Unable to upload memory");
+    }
+
+    setUploadedMemory(payload);
+    return payload;
+  };
+
+  const handleSave = async () => {
+    try {
+      setSubmitError("");
+      await assertCanSubmit();
+      const uploaded = await uploadMemory();
+      const createMemoryArgs = [
+        uploaded.contractArgs.metadataCid,
+        uploaded.contractArgs.metadataHash,
+        uploaded.contractArgs.latE6,
+        uploaded.contractArgs.lngE6,
+      ] as const;
+
+      setSubmitStep("wallet");
+      const estimatedGas = await estimateCreateMemoryGas(address as `0x${string}`, createMemoryArgs);
+      const txHash = await writeContractAsync({
+        ...memoryRegistryContract,
+        functionName: "createMemory",
+        args: createMemoryArgs,
+        ...estimatedGas,
+      });
+
+      setSubmitStep("confirming");
+      await waitForTransactionReceipt(wagmiConfig, {
+        chainId: STATUS_HOODI_CHAIN_ID,
+        hash: txHash,
+      });
+
+      if (!locationCoords) {
+        throw new Error("Location was cleared before the memory was saved");
+      }
+
+      const newMemory: MemoryData = {
+        id: Date.now(),
+        title,
+        caption,
+        date: new Date().toLocaleDateString("en-US", {
+          month: "long",
+          day: "numeric",
+          year: "numeric",
+        }),
+        location: manualLocation || "Unknown Location",
+        lat: locationCoords.lat,
+        lng: locationCoords.lng,
+        photos: uploaded.imageCids.map(ipfsToGatewayUrl),
+        emoji: selectedEmoji || "📍",
+        metadataCid: uploaded.metadataCid,
+        metadataHash: uploaded.metadataHash,
+        txHash,
+      };
+
+      setSubmitStep("saved");
+      onSave(newMemory);
+      resetForm();
+      onClose();
+    } catch (error) {
+      setSubmitStep("idle");
+      setSubmitError(
+        error instanceof Error ? error.message : "Unable to save memory"
+      );
+    }
   };
 
   const resetForm = () => {
     setStep("photos");
     setPhotos([]);
+    setPhotoFiles([]);
     setTitle("");
     setCaption("");
     // Emoji no longer used
     setLocationCoords(null);
     setManualLocation("");
+    setSubmitStep("idle");
+    setSubmitError("");
+    setUploadedMemory(null);
     if (mapInstanceRef.current) {
       mapInstanceRef.current.remove();
       mapInstanceRef.current = null;
     }
   };
+
+  const isSubmitting = submitStep !== "idle";
+  const saveButtonLabel =
+    submitStep === "karma"
+      ? "Checking Karma..."
+      : submitStep === "uploading"
+        ? "Uploading..."
+        : submitStep === "wallet"
+          ? "Confirm in Wallet"
+          : submitStep === "confirming"
+            ? "Saving Onchain..."
+            : submitStep === "saved"
+              ? "Saved"
+              : uploadedMemory
+                ? "Retry Onchain Save"
+                : "💾 Save Memory";
 
   if (!isOpen) return null;
 
@@ -293,6 +432,7 @@ export default function AddMemoryModal({
                   <div className="grid grid-cols-4 gap-3 max-h-48 overflow-y-auto">
                     {photos.map((photo, index) => (
                       <div key={index} className="relative group">
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
                           src={photo}
                           alt={`Memory photo ${index + 1}`}
@@ -322,7 +462,10 @@ export default function AddMemoryModal({
                 <input
                   type="text"
                   value={title}
-                  onChange={(e) => setTitle(e.target.value)}
+                  onChange={(e) => {
+                    setUploadedMemory(null);
+                    setTitle(e.target.value);
+                  }}
                   placeholder="e.g., Sunrise at the Temple"
                   className="w-full bg-slate-800 border border-purple-500/30 rounded-lg px-4 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
                 />
@@ -335,7 +478,10 @@ export default function AddMemoryModal({
                 </label>
                 <textarea
                   value={caption}
-                  onChange={(e) => setCaption(e.target.value)}
+                  onChange={(e) => {
+                    setUploadedMemory(null);
+                    setCaption(e.target.value);
+                  }}
                   placeholder="What was special about this moment?"
                   rows={4}
                   className="w-full bg-slate-800 border border-purple-500/30 rounded-lg px-4 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 resize-none"
@@ -356,7 +502,10 @@ export default function AddMemoryModal({
                 <input
                   type="text"
                   value={manualLocation}
-                  onChange={(e) => setManualLocation(e.target.value)}
+                  onChange={(e) => {
+                    setUploadedMemory(null);
+                    setManualLocation(e.target.value);
+                  }}
                   placeholder="e.g., Tokyo, Japan"
                   className="w-full bg-slate-800 border border-purple-500/30 rounded-lg px-4 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
                 />
@@ -389,6 +538,21 @@ export default function AddMemoryModal({
                     {locationCoords.lng.toFixed(4)}
                   </p>
                 </div>
+              )}
+            </div>
+          )}
+
+          {(submitError || uploadedMemory || isSubmitting) && (
+            <div className="mt-6 rounded-lg border border-purple-500/30 bg-slate-950/70 p-3 text-sm text-gray-200">
+              {isSubmitting && <p>{saveButtonLabel}</p>}
+              {uploadedMemory && !isSubmitting && (
+                <p>
+                  Uploaded to Pinata. If the wallet transaction failed, you can
+                  retry without uploading again.
+                </p>
+              )}
+              {submitError && (
+                <p className="mt-2 text-amber-300">{submitError}</p>
               )}
             </div>
           )}
@@ -427,17 +591,19 @@ export default function AddMemoryModal({
             className={`px-6 py-2 rounded-lg font-medium transition ${
               (step === "photos" && photos.length === 0) ||
               (step === "details" && !title) ||
-              (step === "location" && !locationCoords)
+              (step === "location" && !locationCoords) ||
+              isSubmitting
                 ? "bg-slate-600 text-gray-500 cursor-not-allowed"
                 : "bg-gradient-to-r from-purple-600 to-purple-700 text-white hover:from-purple-700 hover:to-purple-800"
             }`}
             disabled={
               (step === "photos" && photos.length === 0) ||
               (step === "details" && !title) ||
-              (step === "location" && !locationCoords)
+              (step === "location" && !locationCoords) ||
+              isSubmitting
             }
           >
-            {step === "location" ? "💾 Save Memory" : "Next →"}
+            {step === "location" ? saveButtonLabel : "Next →"}
           </button>
         </div>
       </div>
