@@ -423,15 +423,20 @@ export default function Map({
     mapInstanceRef.current = map;
 
     // Clamp ONLY vertical movement (north/south)
+    let isClamping = false;
     function clampVerticalPan() {
+      if (isClamping) return; // Prevent recursive calls
+      
       const center = map.getCenter();
       const clampedLat = Math.max(MIN_LAT, Math.min(MAX_LAT, center.lat));
 
       if (clampedLat !== center.lat) {
+        isClamping = true;
         map.panTo([clampedLat, center.lng], { animate: false });
+        isClamping = false;
       }
     }
-
+    
     map.on("drag", clampVerticalPan);
     map.on("moveend", clampVerticalPan);
 
@@ -544,23 +549,9 @@ export default function Map({
 
     new LocateControl({ position: "bottomright" }).addTo(map);
 
-    // --- Visited radius circles (simplified - use default renderer) ---
+    // --- Visited-area system using clipPath masks ---
     const VISITED_RADIUS_METERS = 100;
     let updateFrameId: number | null = null;
-
-    function addVisitedArea(lat: number, lng: number) {
-      // Plain L.circle with default renderer - no custom pane roulette wheel
-      L.circle([lat, lng], {
-        radius: VISITED_RADIUS_METERS,
-        stroke: true,
-        color: "#eab308",
-        opacity: 0.5,
-        weight: 2,
-        dashArray: "5, 5",
-        fillColor: "#eab308",
-        fillOpacity: 0.25,
-      }).addTo(map);
-    }
 
     // Clip the streets pane to circles at the user's location and every
     // memory, so the labelled Voyager tiles are only visible inside
@@ -634,7 +625,6 @@ export default function Map({
                 mapInstanceRef.current.invalidateSize();
                 mapInstanceRef.current.setView([latitude, longitude], 13, { animate: true });
                 mapInstanceRef.current.whenReady(() => {
-                  addVisitedArea(latitude, longitude);
                   updateStreetsMask();
                 });
               }
@@ -648,7 +638,6 @@ export default function Map({
           
           // Use map.whenReady to ensure pane renderer is ready
           map.whenReady(() => {
-            addVisitedArea(latitude, longitude);
             updateStreetsMask();
           });
 
@@ -703,8 +692,6 @@ export default function Map({
     // Memory markers - add only when map is ready
     map.whenReady(() => {
       INITIAL_SAMPLE_MEMORIES.forEach((memory) => {
-        addVisitedArea(memory.lat, memory.lng);
-
         const marker = L.marker([memory.lat, memory.lng], {
           icon: createMemoryIcon(),
         }).addTo(map);
@@ -785,7 +772,6 @@ export default function Map({
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onSave={handleSaveMemory}
-        map={mapInstanceRef.current}
         currentLocation={userLocationRef.current ? { lat: userLocationRef.current.lat, lng: userLocationRef.current.lng } : undefined}
       />
 

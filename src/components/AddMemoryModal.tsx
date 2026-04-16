@@ -10,6 +10,7 @@ import { ipfsToGatewayUrl } from "@/lib/ipfs";
 import { STATUS_HOODI_CHAIN_ID, wagmiConfig } from "@/lib/wallet/config";
 import { memoryRegistryContract } from "@/lib/wallet/memoryRegistry";
 import { estimateCreateMemoryGas } from "@/lib/wallet/statusGas";
+import { searchLocations, type LocationResult } from "@/utils/locationSearch";
 
 export type MemoryData = {
   id: number;
@@ -81,6 +82,10 @@ export default function AddMemoryModal({
   const [uploadedMemory, setUploadedMemory] = useState<UploadedMemory | null>(
     null
   );
+  const [selectedEmoji, setSelectedEmoji] = useState("📍");
+  const [locationSearchResults, setLocationSearchResults] = useState<LocationResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragRef = useRef<HTMLDivElement>(null);
@@ -88,6 +93,7 @@ export default function AddMemoryModal({
   const mapInstanceRef = useRef<L.Map | null>(null);
   const markerRef = useRef<L.Marker | null>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
+  const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const handlePhotoSelect = useCallback((files: FileList) => {
     const imageFiles = Array.from(files).filter((file) =>
@@ -137,6 +143,97 @@ export default function AddMemoryModal({
     setPhotos((prev) => prev.filter((_, i) => i !== index));
     setPhotoFiles((prev) => prev.filter((_, i) => i !== index));
   };
+  // Debounced location search with auto-select first result
+  const handleLocationInputChange = (query: string) => {
+    setUploadedMemory(null);
+    setManualLocation(query);
+    setShowSuggestions(true);
+
+    // Clear previous timer
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    // If input is empty, clear suggestions
+    if (query.trim().length === 0) {
+      setLocationSearchResults([]);
+      return;
+    }
+
+    // Set new debounce timer (500ms delay)
+    debounceTimerRef.current = setTimeout(async () => {
+      setIsSearching(true);
+
+      try {
+        const results = await searchLocations(query);
+        console.log("Location search results for:", query, results);
+        setLocationSearchResults(results);
+
+        // Auto-select first result (Google Maps style)
+        if (results.length > 0) {
+          const bestMatch = results[0];
+
+          // Set coordinates (triggers map update)
+          setLocationCoords({ lat: bestMatch.lat, lng: bestMatch.lng });
+
+          // Auto-pin map if it exists
+          if (mapInstanceRef.current) {
+            mapInstanceRef.current.flyTo([bestMatch.lat, bestMatch.lng], 8);
+
+            if (markerRef.current) {
+              mapInstanceRef.current.removeLayer(markerRef.current);
+            }
+
+            markerRef.current = L.marker([bestMatch.lat, bestMatch.lng], {
+              icon: L.icon({
+                iconUrl:
+                  "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-violet.png",
+                shadowUrl:
+                  "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
+                iconSize: [25, 41],
+                iconAnchor: [12, 41],
+                popupAnchor: [1, -34],
+                shadowSize: [41, 41],
+              }),
+            }).addTo(mapInstanceRef.current);
+          }
+        }
+      } finally {
+        setIsSearching(false);
+      }
+    }, 500);
+  };
+
+  const handleLocationSelect = (location: LocationResult) => {
+    setManualLocation(location.displayName || location.name);
+    setLocationCoords({ lat: location.lat, lng: location.lng });
+    setShowSuggestions(false);
+    setLocationSearchResults([]);
+
+    // Auto-pan and pin map if it exists
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.flyTo([location.lat, location.lng], 8);
+      
+      // Remove old marker if exists
+      if (markerRef.current) {
+        mapInstanceRef.current.removeLayer(markerRef.current);
+      }
+
+      // Add new marker
+      markerRef.current = L.marker([location.lat, location.lng], {
+        icon: L.icon({
+          iconUrl:
+            "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-violet.png",
+          shadowUrl:
+            "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
+          iconSize: [25, 41],
+          iconAnchor: [12, 41],
+          popupAnchor: [1, -34],
+          shadowSize: [41, 41],
+        }),
+      }).addTo(mapInstanceRef.current);
+    }
+  };
 
   // Auto-initialize map when location step is reached
   useEffect(() => {
@@ -163,6 +260,15 @@ export default function AddMemoryModal({
 
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+    };
   }, []);
 
   const initMapPicker = () => {
@@ -367,6 +473,14 @@ export default function AddMemoryModal({
     setSubmitStep("idle");
     setSubmitError("");
     setUploadedMemory(null);
+    setShowSuggestions(false);
+    setLocationSearchResults([]);
+    
+    // Clear debounce timer
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+    
     if (mapInstanceRef.current) {
       mapInstanceRef.current.remove();
       mapInstanceRef.current = null;
@@ -492,7 +606,7 @@ export default function AddMemoryModal({
               {/* Caption */}
               <div>
                 <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Caption or Message
+                  Memory Caption
                 </label>
                 <textarea
                   value={caption}
@@ -505,8 +619,6 @@ export default function AddMemoryModal({
                   className="w-full bg-slate-800 border border-purple-500/30 rounded-lg px-4 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 resize-none"
                 />
               </div>
-
-
             </div>
           )}
 
@@ -517,16 +629,48 @@ export default function AddMemoryModal({
                 <label className="block text-sm font-medium text-gray-300 mb-2">
                   Location Name (Optional)
                 </label>
-                <input
-                  type="text"
-                  value={manualLocation}
-                  onChange={(e) => {
-                    setUploadedMemory(null);
-                    setManualLocation(e.target.value);
-                  }}
-                  placeholder="e.g., Tokyo, Japan"
-                  className="w-full bg-slate-800 border border-purple-500/30 rounded-lg px-4 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
-                />
+                <div className="relative">
+                  <input
+                    type="text"
+                    value={manualLocation}
+                    onChange={(e) => handleLocationInputChange(e.target.value)}
+                    onFocus={() => manualLocation && setShowSuggestions(true)}
+                    placeholder="e.g., Tokyo, Japan"
+                    className="w-full bg-slate-800 border border-purple-500/30 rounded-lg px-4 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+                  />
+                  
+                  {/* Search Results Dropdown */}
+                  {showSuggestions && manualLocation.trim().length > 0 && (
+                    <div
+                      ref={suggestionsRef}
+                      className="absolute top-full left-0 right-0 mt-1 bg-slate-800 border border-purple-500/30 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto"
+                    >
+                      {isSearching && (
+                        <div className="px-4 py-3 text-gray-400 text-sm flex items-center gap-2">
+                          <div className="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
+                          Searching...
+                        </div>
+                      )}
+                      
+                      {!isSearching && locationSearchResults.length > 0 && (
+                        locationSearchResults.map((location, index) => (
+                          <button
+                            key={`${location.lat}-${location.lng}-${index}`}
+                            onClick={() => handleLocationSelect(location)}
+                            className="w-full text-left px-4 py-3 hover:bg-purple-500/20 border-b border-purple-500/10 last:border-b-0 transition"
+                          >
+                            <div className="text-sm text-gray-100 font-medium">{location.name}</div>
+                            <div className="text-xs text-gray-400 truncate">{location.displayName}</div>
+                          </button>
+                        ))
+                      )}
+                      
+                      {!isSearching && locationSearchResults.length === 0 && (
+                        <div className="px-4 py-3 text-gray-400 text-sm">No locations found</div>
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
 
               {/* Map Picker */}
