@@ -1,6 +1,6 @@
 "use client";
 
-import { AppKitButton, useAppKitAccount, useAppKitNetwork } from "@reown/appkit/react";
+import { useAppKitAccount, useAppKitNetwork } from "@reown/appkit/react";
 import { useEffect, useMemo, useState } from "react";
 import { formatUnits } from "viem";
 import { STATUS_HOODI_CHAIN_ID, statusHoodiNetwork } from "@/lib/wallet/config";
@@ -96,11 +96,19 @@ export default function WalletStatus() {
 
   return (
     <div className="pointer-events-auto flex flex-col items-end gap-2 text-right">
-      <AppKitButton />
+      {isConnected && (
+        <div className="flex items-center gap-2 rounded-full border border-purple-500/30 bg-gray-950/85 px-3 py-1.5 text-xs text-gray-200 shadow-lg shadow-purple-950/30">
+          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-purple-600 text-[11px] font-bold uppercase text-white">
+            {addressLabel.charAt(2) || "?"}
+          </div>
+          <div className="font-medium text-white leading-tight">
+            {addressLabel}
+          </div>
+        </div>
+      )}
 
       {isConnected && (
         <div className="max-w-[260px] rounded-lg border border-purple-500/30 bg-gray-950/85 px-3 py-2 text-xs text-gray-200 shadow-lg shadow-purple-950/30">
-          <div className="font-medium text-white">{addressLabel}</div>
           <div
             className={
               isOnStatusHoodi ? "text-emerald-300" : "text-amber-300"

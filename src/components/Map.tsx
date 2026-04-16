@@ -14,69 +14,6 @@ L.Icon.Default.mergeOptions({
   shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
 });
 
-const INITIAL_SAMPLE_MEMORIES: MemoryData[] = [
-  {
-    id: 1,
-    title: "Sunrise at Angkor Wat",
-    date: "March 12, 2024",
-    location: "Siem Reap, Cambodia",
-    lat: 13.4125,
-    lng: 103.867,
-    caption:
-      "Watched the sun rise over the ancient spires, mist rolling across the moat...",
-    emoji: "🌅",
-    photos: [],
-  },
-  {
-    id: 2,
-    title: "Lost in the Medina",
-    date: "October 3, 2023",
-    location: "Fez, Morocco",
-    lat: 34.0583,
-    lng: -4.9998,
-    caption:
-      "Turned down a spice alley and found the most incredible blue-tiled courtyard...",
-    emoji: "🧭",
-    photos: [],
-  },
-  {
-    id: 3,
-    title: "Northern Lights",
-    date: "January 19, 2024",
-    location: "Tromsø, Norway",
-    lat: 69.6496,
-    lng: 18.9553,
-    caption:
-      "Standing in -12°C, jaw dropped. Green and violet ribbons across the whole sky.",
-    emoji: "🌌",
-    photos: [],
-  },
-  {
-    id: 4,
-    title: "Street Food Night Market",
-    date: "August 7, 2023",
-    location: "Bangkok, Thailand",
-    lat: 13.7563,
-    lng: 100.5018,
-    caption:
-      "Pad kra pao at 11pm, the wok still smoking. The best meal of my life.",
-    emoji: "🍜",
-    photos: [],
-  },
-  {
-    id: 5,
-    title: "Cliffside Monastery",
-    date: "May 22, 2024",
-    location: "Meteora, Greece",
-    lat: 39.7217,
-    lng: 21.6307,
-    caption:
-      "Hiked up in the early morning before the tourists arrived. Pure silence.",
-    emoji: "⛪",
-    photos: [],
-  },
-];
-
 function createMemoryIcon() {
   return L.divIcon({
     className: "",
@@ -365,10 +302,11 @@ export default function Map({
   const userLocationRef = useRef<L.LatLng | null>(null);
   const streetsPaneRef = useRef<HTMLElement | null>(null);
 
-  const [memories, setMemories] = useState<MemoryData[]>(INITIAL_SAMPLE_MEMORIES);
+  const [memories, setMemories] = useState<MemoryData[]>([]);
   const [selectedMemory, setSelectedMemory] = useState<MemoryData | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
-  const memoriesRef = useRef<MemoryData[]>(INITIAL_SAMPLE_MEMORIES);
+  const [isLocating, setIsLocating] = useState(true);
+  const memoriesRef = useRef<MemoryData[]>([]);
 
   // Keep memoriesRef in sync with memories state
   useEffect(() => {
@@ -418,27 +356,58 @@ export default function Map({
       zoomControl: false,
       attributionControl: false,
       renderer: L.svg(),
+      zoomSnap: 0,
+      zoomDelta: 0.4,
+      scrollWheelZoom: false,
+      zoomAnimation: true,
+      zoomAnimationThreshold: 8,
+      fadeAnimation: true,
+      markerZoomAnimation: true,
     });
 
     mapInstanceRef.current = map;
 
-    // Clamp ONLY vertical movement (north/south)
+    // Clamp vertical pan so the viewport's top/bottom edges can't move
+    // past the world limits (±85° lat). Horizontal stays free for wrap.
+    // At low zooms where the world is shorter than the viewport height,
+    // the viewport auto-centers vertically.
     let isClamping = false;
     function clampVerticalPan() {
-      if (isClamping) return; // Prevent recursive calls
-      
-      const center = map.getCenter();
-      const clampedLat = Math.max(MIN_LAT, Math.min(MAX_LAT, center.lat));
+      if (isClamping) return;
 
-      if (clampedLat !== center.lat) {
+      const zoom = map.getZoom();
+      const halfH = map.getSize().y / 2;
+      const topEdgeY = map.project([MAX_LAT, 0], zoom).y;
+      const bottomEdgeY = map.project([MIN_LAT, 0], zoom).y;
+      const worldHeight = bottomEdgeY - topEdgeY;
+
+      const center = map.getCenter();
+      const centerPoint = map.project(center, zoom);
+      let targetY = centerPoint.y;
+
+      if (worldHeight <= halfH * 2) {
+        targetY = (topEdgeY + bottomEdgeY) / 2;
+      } else {
+        targetY = Math.max(
+          topEdgeY + halfH,
+          Math.min(bottomEdgeY - halfH, centerPoint.y)
+        );
+      }
+
+      if (targetY !== centerPoint.y) {
         isClamping = true;
-        map.panTo([clampedLat, center.lng], { animate: false });
+        map.panTo(map.unproject([centerPoint.x, targetY], zoom), {
+          animate: false,
+        });
         isClamping = false;
       }
     }
-    
+
     map.on("drag", clampVerticalPan);
     map.on("moveend", clampVerticalPan);
+    map.on("zoom", clampVerticalPan);
+    map.on("zoomend", clampVerticalPan);
+    map.on("resize", clampVerticalPan);
 
     // Fix initial position
     clampVerticalPan();
@@ -495,6 +464,101 @@ export default function Map({
     // Zoom control
     L.control.zoom({ position: "bottomright" }).addTo(map);
 
+    // --- Smooth wheel zoom (Google-Maps-style) ---
+    // Intercept wheel events and tween zoom toward a goal each frame
+    // using map._move() for instant per-frame updates. Settles on
+    // wheel-stop via _moveEnd so tile layers re-render cleanly.
+    const mapInternals = map as unknown as {
+      _stop: () => void;
+      _moveStart: (moved: boolean, pinch: boolean) => void;
+      _move: (center: L.LatLng, zoom: number) => void;
+      _moveEnd: (moved: boolean) => void;
+    };
+
+    let swzGoalZoom = map.getZoom();
+    let swzPrevCenter = map.getCenter();
+    let swzPrevZoom = map.getZoom();
+    let swzWheelMousePos = L.point(0, 0);
+    let swzCenterPoint = map.getSize().divideBy(2);
+    let swzWheelStartLatLng = map.getCenter();
+    let swzIsWheeling = false;
+    let swzMoved = false;
+    let swzRafId = 0;
+    let swzTimeoutId: ReturnType<typeof setTimeout> | null = null;
+
+    function smoothZoomUpdate() {
+      if (
+        !map.getCenter().equals(swzPrevCenter) ||
+        map.getZoom() !== swzPrevZoom
+      ) {
+        return;
+      }
+
+      const currentZoom = map.getZoom();
+      const nextZoom =
+        Math.floor((currentZoom + (swzGoalZoom - currentZoom) * 0.6) * 100) /
+        100;
+
+      const delta = swzWheelMousePos.subtract(swzCenterPoint);
+      const center = map.unproject(
+        map.project(swzWheelStartLatLng, nextZoom).subtract(delta),
+        nextZoom
+      );
+
+      if (!swzMoved) {
+        mapInternals._moveStart(true, false);
+        swzMoved = true;
+      }
+      mapInternals._move(center, nextZoom);
+      swzPrevCenter = map.getCenter();
+      swzPrevZoom = map.getZoom();
+
+      swzRafId = requestAnimationFrame(smoothZoomUpdate);
+    }
+
+    function smoothZoomEnd() {
+      swzIsWheeling = false;
+      cancelAnimationFrame(swzRafId);
+      if (swzMoved) {
+        mapInternals._moveEnd(true);
+        swzMoved = false;
+      }
+    }
+
+    function smoothZoomStart(e: WheelEvent) {
+      swzIsWheeling = true;
+      swzWheelMousePos = map.mouseEventToContainerPoint(e);
+      swzCenterPoint = map.getSize().divideBy(2);
+      swzWheelStartLatLng = map.containerPointToLatLng(swzWheelMousePos);
+      mapInternals._stop();
+      swzGoalZoom = map.getZoom();
+      swzPrevCenter = map.getCenter();
+      swzPrevZoom = map.getZoom();
+      swzMoved = false;
+      swzRafId = requestAnimationFrame(smoothZoomUpdate);
+    }
+
+    function onWheel(e: WheelEvent) {
+      e.preventDefault();
+      e.stopPropagation();
+
+      if (!swzIsWheeling) smoothZoomStart(e);
+
+      const lineHeight = e.deltaMode === 1 ? 20 : e.deltaMode === 2 ? 60 : 1;
+      const wheelDelta = -e.deltaY * lineHeight;
+      swzGoalZoom = Math.max(
+        map.getMinZoom(),
+        Math.min(map.getMaxZoom(), swzGoalZoom + wheelDelta * 0.007)
+      );
+      swzWheelMousePos = map.mouseEventToContainerPoint(e);
+
+      if (swzTimeoutId !== null) clearTimeout(swzTimeoutId);
+      swzTimeoutId = setTimeout(smoothZoomEnd, 180);
+    }
+
+    const mapContainer = map.getContainer();
+    mapContainer.addEventListener("wheel", onWheel, { passive: false });
+
     // Locate Me control - custom control to relocate to user geolocation
     const LocateControl = L.Control.extend({
       onAdd: function () {
@@ -502,41 +566,25 @@ export default function Map({
         const button = L.DomUtil.create("a", "", container);
         
         button.innerHTML = `
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="display: block; margin: auto;">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display: block; margin: auto;">
             <circle cx="12" cy="12" r="2.5" fill="currentColor"></circle>
-            <circle cx="12" cy="12" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"></circle>
-            <line x1="12" y1="3" x2="12" y2="1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></line>
-            <line x1="12" y1="23" x2="12" y2="21" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></line>
-            <line x1="21" y1="12" x2="23" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></line>
-            <line x1="1" y1="12" x2="3" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></line>
+            <circle cx="12" cy="12" r="6"></circle>
+            <line x1="12" y1="2" x2="12" y2="4"></line>
+            <line x1="12" y1="20" x2="12" y2="22"></line>
+            <line x1="20" y1="12" x2="22" y2="12"></line>
+            <line x1="2" y1="12" x2="4" y2="12"></line>
           </svg>
         `;
         button.href = "#";
         button.title = "Locate me";
-        button.style.width = "30px";
-        button.style.height = "30px";
         button.style.display = "flex";
         button.style.alignItems = "center";
         button.style.justifyContent = "center";
-        button.style.color = "#8b5cf6";
-        button.style.transition = "all 0.2s ease";
-        button.style.backgroundColor = "white";
-        button.style.cursor = "pointer";
-        
-        button.onmouseover = () => {
-          button.style.color = "#7c3aed";
-          button.style.backgroundColor = "#f3f4f6";
-        };
-        
-        button.onmouseout = () => {
-          button.style.color = "#8b5cf6";
-          button.style.backgroundColor = "white";
-        };
         
         L.DomEvent.on(button, "click", (e) => {
           L.DomEvent.preventDefault(e);
           if (userLocationRef.current) {
-            map.setView([userLocationRef.current.lat, userLocationRef.current.lng], 13, {
+            map.setView([userLocationRef.current.lat, userLocationRef.current.lng], 17, {
               animate: true,
               duration: 0.5,
             });
@@ -610,31 +658,36 @@ export default function Map({
         (pos) => {
           const { latitude, longitude } = pos.coords;
           userLocationRef.current = L.latLng(latitude, longitude);
-          
+
           // Ensure map is ready and has proper dimensions before setView
-          if (!mapInstanceRef.current) return;
-          
+          if (!mapInstanceRef.current) {
+            setIsLocating(false);
+            return;
+          }
+
           const map = mapInstanceRef.current;
           const container = map.getContainer();
-          
+
           // Check if container has dimensions
           if (container.offsetWidth === 0 || container.offsetHeight === 0) {
             // Wait for next frame and try again
             requestAnimationFrame(() => {
               if (mapInstanceRef.current && container.offsetWidth > 0) {
                 mapInstanceRef.current.invalidateSize();
-                mapInstanceRef.current.setView([latitude, longitude], 13, { animate: true });
+                mapInstanceRef.current.setView([latitude, longitude], 17, { animate: true });
                 mapInstanceRef.current.whenReady(() => {
                   updateStreetsMask();
                 });
               }
+              setIsLocating(false);
             });
             return;
           }
-          
+
           // Container has dimensions, proceed with setView
           map.invalidateSize();
-          map.setView([latitude, longitude], 13, { animate: true });
+          map.setView([latitude, longitude], 17, { animate: true });
+          setIsLocating(false);
           
           // Use map.whenReady to ensure pane renderer is ready
           map.whenReady(() => {
@@ -684,47 +737,21 @@ export default function Map({
           userMarkerRef.current = userMarker;
         },
         () => {
-          // ignore errors
-        }
+          setIsLocating(false);
+        },
+        { timeout: 10000, maximumAge: 60000 }
       );
+    } else {
+      setIsLocating(false);
     }
-
-    // Memory markers - add only when map is ready
-    map.whenReady(() => {
-      INITIAL_SAMPLE_MEMORIES.forEach((memory) => {
-        const marker = L.marker([memory.lat, memory.lng], {
-          icon: createMemoryIcon(),
-        }).addTo(map);
-
-        marker.bindPopup(
-          `<div style="
-            background: rgba(17, 24, 39, 0.97);
-            border: 1px solid rgba(139, 92, 246, 0.4);
-            border-radius: 12px;
-            padding: 14px 16px;
-            min-width: 220px;
-            font-family: inherit;
-            box-shadow: 0 0 20px rgba(139, 92, 246, 0.15);
-          ">
-            <div style="font-size: 22px; margin-bottom: 6px;">${memory.emoji}</div>
-            <div style="font-size: 15px; font-weight: 700; color: #f9fafb; margin-bottom: 2px;">${memory.title}</div>
-            <div style="font-size: 11px; color: rgba(139, 92, 246, 0.9); margin-bottom: 8px; letter-spacing: 0.05em;">
-              📍 ${memory.location} &nbsp;·&nbsp; ${memory.date}
-            </div>
-            <div style="font-size: 12px; color: #9ca3af; line-height: 1.5;">${memory.caption}</div>
-          </div>`,
-          {
-            className: "memory-popup",
-            maxWidth: 280,
-          }
-        );
-      });
-    });
 
     return () => {
       if (updateFrameId !== null) {
         cancelAnimationFrame(updateFrameId);
       }
+      mapContainer.removeEventListener("wheel", onWheel);
+      cancelAnimationFrame(swzRafId);
+      if (swzTimeoutId !== null) clearTimeout(swzTimeoutId);
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
@@ -766,6 +793,45 @@ export default function Map({
         ref={mapRef}
         style={{ width: "100%", height: "100%", minHeight: "100vh" }}
       />
+
+      {/* Locating overlay — shown while geolocation resolves */}
+      <div
+        className="locating-overlay"
+        style={{
+          position: "absolute",
+          inset: 0,
+          zIndex: 1000,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          opacity: isLocating ? 1 : 0,
+          pointerEvents: "none",
+        }}
+      >
+        <div
+          style={{
+            fontFamily: "'Architects Daughter', 'Marker Felt', cursive",
+            fontSize: "20px",
+            fontWeight: 400,
+            letterSpacing: "0.25em",
+            color: "#2a1a0a",
+            textTransform: "uppercase",
+            display: "flex",
+          }}
+        >
+          {"LOADING".split("").map((ch, i) => (
+            <span
+              key={i}
+              style={{
+                display: "inline-block",
+                animation: `letterWave 0.9s ease-in-out ${i * 0.14}s infinite`,
+              }}
+            >
+              {ch}
+            </span>
+          ))}
+        </div>
+      </div>
 
       {/* Add Memory Modal */}
       <AddMemoryModal

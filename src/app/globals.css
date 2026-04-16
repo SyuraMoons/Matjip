@@ -1,8 +1,9 @@
+@import url("https://fonts.googleapis.com/css2?family=Architects+Daughter&display=swap");
 @import "tailwindcss";
 
 :root {
   --background: #ffffff;
-  --foreground: #171717;
+  --foreground: #ba7f7f;
 }
 
 @theme inline {
@@ -12,9 +13,9 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
   :root {
-    --background: #0a0a0a;
+    --background: #7590d0;
     --foreground: #ededed;
   }
 }
@@ -29,6 +30,85 @@ body {
   0%   { transform: scale(1);   opacity: 0.6; }
   70%  { transform: scale(2.5); opacity: 0; }
   100% { transform: scale(2.5); opacity: 0; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+@keyframes shine {
+  0%   { background-position: 220% 0; }
+  100% { background-position: -120% 0; }
+}
+
+@keyframes dustDrift {
+  0%   { transform: translate(0, 0) scale(0.6); opacity: 0; }
+  10%  { opacity: var(--dust-opacity, 0.5); }
+  25%  { transform: translate(calc(var(--dust-dx, 0px) * 0.25 + var(--dust-sx, 0px)), calc(var(--dust-dy, 0px) * 0.25 - var(--dust-sy, 0px))) scale(0.85); }
+  50%  { transform: translate(calc(var(--dust-dx, 0px) * 0.5 - var(--dust-sx, 0px)), calc(var(--dust-dy, 0px) * 0.5 + var(--dust-sy, 0px))) scale(1.1); }
+  75%  { transform: translate(calc(var(--dust-dx, 0px) * 0.75 + var(--dust-sx, 0px)), calc(var(--dust-dy, 0px) * 0.75 - var(--dust-sy, 0px))) scale(1.4); }
+  90%  { opacity: var(--dust-opacity, 0.5); }
+  100% { transform: translate(var(--dust-dx, 0px), var(--dust-dy, 0px)) scale(1.8); opacity: 0; }
+}
+
+@keyframes locatingPulse {
+  0%, 100% { transform: scale(1);   opacity: 1;   }
+  50%      { transform: scale(1.1); opacity: 0.7; }
+}
+
+@keyframes letterWave {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-11px); }
+}
+
+.locating-overlay {
+  transition: opacity 0.35s ease-out;
+}
+
+/* Cream tile-style Leaflet controls (zoom + locate) */
+.leaflet-bar {
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
+.leaflet-bar a {
+  width: 48px !important;
+  height: 48px !important;
+  background-color: #faf1d8 !important;
+  border: 2px solid #c9b487 !important;
+  border-radius: 14px !important;
+  color: #4a2c15 !important;
+  margin-bottom: 8px !important;
+  box-shadow:
+    0 3px 0 #b89f6a,
+    0 6px 10px rgba(60, 40, 20, 0.25) !important;
+  font-weight: 700 !important;
+  font-size: 22px !important;
+  line-height: 42px !important;
+  text-align: center !important;
+  transition:
+    transform 0.15s,
+    background-color 0.15s,
+    box-shadow 0.15s !important;
+}
+
+.leaflet-bar a:hover {
+  background-color: #fff5dd !important;
+  transform: translateY(-2px) !important;
+}
+
+.leaflet-bar a:active {
+  transform: translateY(0) !important;
+  box-shadow:
+    0 1px 0 #b89f6a,
+    0 2px 4px rgba(60, 40, 20, 0.25) !important;
+}
+
+.leaflet-bar a.leaflet-disabled {
+  background-color: #e8dcb4 !important;
+  color: #9a8760 !important;
+  cursor: not-allowed !important;
 }
 
 /* Strip Leaflet's default white popup chrome */
