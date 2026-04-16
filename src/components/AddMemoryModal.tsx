@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useCallback } from "react";
+import { useState, useRef, useCallback, useEffect } from "react";
 import L from "leaflet";
 
 export type MemoryData = {
@@ -59,7 +59,7 @@ export default function AddMemoryModal({
   const [photos, setPhotos] = useState<string[]>([]);
   const [title, setTitle] = useState("");
   const [caption, setCaption] = useState("");
-  const [selectedEmoji, setSelectedEmoji] = useState("📍");
+  const [selectedEmoji] = useState("");
   const [locationCoords, setLocationCoords] = useState<{
     lat: number;
     lng: number;
@@ -114,17 +114,32 @@ export default function AddMemoryModal({
     setPhotos((prev) => prev.filter((_, i) => i !== index));
   };
 
+  // Auto-initialize map when location step is reached
+  useEffect(() => {
+    if (step === "location" && mapPickerRef.current && !mapInstanceRef.current) {
+      // Use setTimeout to ensure the DOM is ready
+      setTimeout(() => {
+        initMapPicker();
+      }, 100);
+    }
+  }, [step]);
+
   const initMapPicker = () => {
     if (!mapPickerRef.current || mapInstanceRef.current) return;
 
     const pickerMap = L.map(mapPickerRef.current, {
       center: locationCoords ? [locationCoords.lat, locationCoords.lng] : [20, 10],
-      zoom: locationCoords ? 8 : 3,
+      zoom: locationCoords ? 8 : 2,
       zoomControl: true,
       attributionControl: false,
     });
 
     mapInstanceRef.current = pickerMap;
+
+    // Force map to recalculate size after initialization
+    setTimeout(() => {
+      pickerMap.invalidateSize();
+    }, 100);
 
     // Add basic tile layer
     L.tileLayer(
@@ -208,7 +223,7 @@ export default function AddMemoryModal({
     setPhotos([]);
     setTitle("");
     setCaption("");
-    setSelectedEmoji("📍");
+    // Emoji no longer used
     setLocationCoords(null);
     setManualLocation("");
     if (mapInstanceRef.current) {
@@ -327,27 +342,7 @@ export default function AddMemoryModal({
                 />
               </div>
 
-              {/* Emoji Selector */}
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-3">
-                  Choose an Emoji for the Pin
-                </label>
-                <div className="grid grid-cols-10 gap-2">
-                  {EMOJI_SUGGESTIONS.map((emoji) => (
-                    <button
-                      key={emoji}
-                      onClick={() => setSelectedEmoji(emoji)}
-                      className={`text-2xl p-2 rounded-lg transition ${
-                        selectedEmoji === emoji
-                          ? "bg-purple-500/50 border border-purple-400"
-                          : "bg-slate-700 border border-slate-600 hover:border-purple-500/50"
-                      }`}
-                    >
-                      {emoji}
-                    </button>
-                  ))}
-                </div>
-              </div>
+
             </div>
           )}
 
