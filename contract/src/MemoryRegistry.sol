@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.24;
 
 contract MemoryRegistry {
     error EmptyMetadataCid();
@@ -33,12 +33,10 @@ contract MemoryRegistry {
 
     Memory[] private memories;
 
-    function createMemory(
-        string calldata metadataCid,
-        bytes32 metadataHash,
-        int32 latE6,
-        int32 lngE6
-    ) external returns (uint256 memoryId) {
+    function createMemory(string calldata metadataCid, bytes32 metadataHash, int32 latE6, int32 lngE6)
+        external
+        returns (uint256 memoryId)
+    {
         if (bytes(metadataCid).length == 0) revert EmptyMetadataCid();
         if (metadataHash == bytes32(0)) revert EmptyMetadataHash();
         if (latE6 < MIN_LAT_E6 || latE6 > MAX_LAT_E6) revert InvalidLatitude();
@@ -58,15 +56,7 @@ contract MemoryRegistry {
             })
         );
 
-        emit MemoryCreated(
-            memoryId,
-            msg.sender,
-            metadataCid,
-            metadataHash,
-            latE6,
-            lngE6,
-            createdAt
-        );
+        emit MemoryCreated(memoryId, msg.sender, metadataCid, metadataHash, latE6, lngE6, createdAt);
     }
 
     function memoryCount() external view returns (uint256) {

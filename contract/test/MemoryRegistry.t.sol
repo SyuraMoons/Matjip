@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.13;
+pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {MemoryRegistry} from "../src/MemoryRegistry.sol";
@@ -29,12 +29,7 @@ contract MemoryRegistryTest is Test {
         vm.warp(1_234);
         vm.prank(poster);
 
-        uint256 memoryId = registry.createMemory(
-            metadataCid,
-            metadataHash,
-            37_566000,
-            126_978000
-        );
+        uint256 memoryId = registry.createMemory(metadataCid, metadataHash, 37_566000, 126_978000);
 
         assertEq(memoryId, 0);
         assertEq(registry.memoryCount(), 1);
@@ -53,35 +48,34 @@ contract MemoryRegistryTest is Test {
         vm.prank(poster);
         vm.expectEmit(true, true, false, true);
 
-        emit MemoryCreated(
-            0,
-            poster,
-            metadataCid,
-            metadataHash,
-            37_566000,
-            126_978000,
-            2_468
-        );
+        emit MemoryCreated(0, poster, metadataCid, metadataHash, 37_566000, 126_978000, 2_468);
 
         registry.createMemory(metadataCid, metadataHash, 37_566000, 126_978000);
     }
 
     function testCreateMemoryIncrementsMemoryIds() public {
-        uint256 firstId = registry.createMemory(
-            metadataCid,
-            metadataHash,
-            1_000000,
-            2_000000
-        );
-        uint256 secondId = registry.createMemory(
-            "ipfs://bafy-second",
-            keccak256("metadata-2"),
-            3_000000,
-            4_000000
-        );
+        uint256 firstId = registry.createMemory(metadataCid, metadataHash, 1_000000, 2_000000);
+        uint256 secondId = registry.createMemory("ipfs://bafy-second", keccak256("metadata-2"), 3_000000, 4_000000);
 
         assertEq(firstId, 0);
         assertEq(secondId, 1);
+        assertEq(registry.memoryCount(), 2);
+    }
+
+    function testMultiplePostersCanCreateMemories() public {
+        address secondPoster = address(0xB0B);
+
+        vm.prank(poster);
+        registry.createMemory(metadataCid, metadataHash, 1_000000, 2_000000);
+
+        vm.prank(secondPoster);
+        registry.createMemory("ipfs://bafy-second", keccak256("metadata-2"), 3_000000, 4_000000);
+
+        MemoryRegistry.Memory memory first = registry.getMemory(0);
+        MemoryRegistry.Memory memory second = registry.getMemory(1);
+
+        assertEq(first.poster, poster);
+        assertEq(second.poster, secondPoster);
         assertEq(registry.memoryCount(), 2);
     }
 
