@@ -1,16 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { useAppKitAccount } from "@reown/appkit/react";
-import type { Address } from "viem";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import AddMemoryModal from "./AddMemoryModal";
 import type { MemoryData } from "./AddMemoryModal";
-import {
-  decentralizedMemoryToMapMemory,
-  loadDecentralizedMemories,
-} from "@/lib/decentralizedMemories";
 
 // Fix default marker icons broken by webpack
 delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
@@ -98,16 +92,10 @@ function createMemoryIcon() {
   });
 }
 
-function escapeHtml(value: string) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
-function createMemoryPopupContent(memory: MemoryData) {
+function createMemoryPopupContent(
+  memory: MemoryData,
+  onReadMore: (memory: MemoryData) => void
+) {
   // Truncate title to 25 characters
   const titleText = memory.title || "Untitled";
   const isTitleLong = titleText.length > 25;
@@ -119,7 +107,6 @@ function createMemoryPopupContent(memory: MemoryData) {
   const truncatedCaption = isCaptionLong
     ? captionText.substring(0, 80) + "..."
     : captionText;
-  const locationText = memory.location || "Unknown Location";
 
   const photosHtml =
     memory.photos.length > 0
@@ -129,7 +116,7 @@ function createMemoryPopupContent(memory: MemoryData) {
         .slice(0, 2)
         .map(
           (photo) => `
-        <img src="${escapeHtml(photo)}" style="
+        <img src="${photo}" style="
           width: 70px;
           height: 70px;
           object-fit: cover;
@@ -159,14 +146,14 @@ function createMemoryPopupContent(memory: MemoryData) {
       ${photosHtml ? `<div style="flex-shrink: 0;">${photosHtml}</div>` : ""}
       <div style="flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: space-between;">
         <div>
-          <div style="font-size: 20px; line-height: 1; margin-bottom: 5px;">${escapeHtml(memory.emoji)}</div>
-          <div style="font-size: 13px; font-weight: 700; color: #f9fafb; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${escapeHtml(titleText)}">${escapeHtml(truncatedTitle)}</div>
+          <div style="font-size: 20px; line-height: 1; margin-bottom: 5px;">${memory.emoji}</div>
+          <div style="font-size: 13px; font-weight: 700; color: #f9fafb; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${titleText}">${truncatedTitle}</div>
           <div style="font-size: 10px; color: rgba(139, 92, 246, 0.85); margin-bottom: 6px; letter-spacing: 0.04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-            📍 ${escapeHtml(locationText.substring(0, 20))}${locationText.length > 20 ? "..." : ""} · ${escapeHtml(memory.date)}
+            📍 ${memory.location.substring(0, 20)}${memory.location.length > 20 ? "..." : ""} · ${memory.date}
           </div>
         </div>
         <div style="font-size: 11px; color: #9ca3af; line-height: 1.4; word-break: break-word;">
-          ${escapeHtml(truncatedCaption)}
+          ${truncatedCaption}
         </div>
       </div>
     </div>
@@ -277,11 +264,9 @@ function MemoryDetailModal({
         >
           {memory.photos && memory.photos.length > 0 ? (
             memory.photos.map((photo, idx) => (
-              // eslint-disable-next-line @next/next/no-img-element
               <img
                 key={idx}
                 src={photo}
-                alt={`${memory.title} photo ${idx + 1}`}
                 style={{
                   width: "100%",
                   height: "140px",
@@ -379,22 +364,10 @@ export default function Map({
   const userMarkerRef = useRef<L.Marker | null>(null);
   const userLocationRef = useRef<L.LatLng | null>(null);
   const streetsPaneRef = useRef<HTMLElement | null>(null);
-  const updateStreetsMaskRef = useRef<() => void>(() => {});
-  const memoryVisitedAreasRef = useRef<L.LayerGroup | null>(null);
-  const addVisitedAreaRef = useRef<(lat: number, lng: number) => void>(
-    () => {}
-  );
-  const { address, isConnected } = useAppKitAccount({ namespace: "eip155" });
 
   const [memories, setMemories] = useState<MemoryData[]>(INITIAL_SAMPLE_MEMORIES);
   const [selectedMemory, setSelectedMemory] = useState<MemoryData | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
-  const [memoryLoadError, setMemoryLoadError] = useState("");
-  const [isLoadingMemories, setIsLoadingMemories] = useState(false);
-  const [currentLocation, setCurrentLocation] = useState<{
-    lat: number;
-    lng: number;
-  }>();
   const memoriesRef = useRef<MemoryData[]>(INITIAL_SAMPLE_MEMORIES);
 
   // Keep memoriesRef in sync with memories state
@@ -407,7 +380,7 @@ export default function Map({
       icon: createMemoryIcon(),
     }).addTo(map);
 
-    marker.bindPopup(createMemoryPopupContent(memory), {
+    marker.bindPopup(createMemoryPopupContent(memory, (m) => {}), {
       className: "memory-popup",
       maxWidth: 300,
     });
@@ -434,15 +407,38 @@ export default function Map({
   useEffect(() => {
     if (!mapRef.current || mapInstanceRef.current) return;
 
+    const MIN_LAT = -85;
+    const MAX_LAT = 85;
+
     const map = L.map(mapRef.current, {
       center: [20, 10],
       zoom: 2,
+      minZoom: 2,
+      worldCopyJump: true,
       zoomControl: false,
       attributionControl: false,
+      renderer: L.svg(),
     });
+
     mapInstanceRef.current = map;
-    
-    // Force map to recalculate size after initialization
+
+    // Clamp ONLY vertical movement (north/south)
+    function clampVerticalPan() {
+      const center = map.getCenter();
+      const clampedLat = Math.max(MIN_LAT, Math.min(MAX_LAT, center.lat));
+
+      if (clampedLat !== center.lat) {
+        map.panTo([clampedLat, center.lng], { animate: false });
+      }
+    }
+
+    map.on("drag", clampVerticalPan);
+    map.on("moveend", clampVerticalPan);
+
+    // Fix initial position
+    clampVerticalPan();
+
+    // Fix sizing
     setTimeout(() => {
       map.invalidateSize();
     }, 100);
@@ -460,6 +456,7 @@ export default function Map({
           '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> ' +
           'contributors &copy; <a href="https://carto.com/">CARTO</a>',
         subdomains: "abcd",
+        minZoom: 2,
         maxZoom: 19,
         opacity: 0.4,
       }
@@ -482,6 +479,7 @@ export default function Map({
           '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> ' +
           'contributors &copy; <a href="https://carto.com/">CARTO</a>',
         subdomains: "abcd",
+        minZoom: 2,
         maxZoom: 19,
         opacity: 1,
         className: "globe-tiles",
@@ -492,16 +490,77 @@ export default function Map({
     // Zoom control
     L.control.zoom({ position: "bottomright" }).addTo(map);
 
-    // --- Visited radius pane ---
-    const visitedPane = map.createPane("visitedPane");
-    visitedPane.style.zIndex = "420";
-    visitedPane.style.pointerEvents = "none";
-    visitedPane.style.willChange = "transform";
-    visitedPane.style.backfaceVisibility = "hidden";
-    memoryVisitedAreasRef.current = L.layerGroup().addTo(map);
+    // Locate Me control - custom control to relocate to user geolocation
+    const LocateControl = L.Control.extend({
+      onAdd: function () {
+        const container = L.DomUtil.create("div", "leaflet-bar leaflet-control");
+        const button = L.DomUtil.create("a", "", container);
+        
+        button.innerHTML = `
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="display: block; margin: auto;">
+            <circle cx="12" cy="12" r="2.5" fill="currentColor"></circle>
+            <circle cx="12" cy="12" r="5.5" fill="none" stroke="currentColor" stroke-width="1.5"></circle>
+            <line x1="12" y1="3" x2="12" y2="1" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></line>
+            <line x1="12" y1="23" x2="12" y2="21" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></line>
+            <line x1="21" y1="12" x2="23" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></line>
+            <line x1="1" y1="12" x2="3" y2="12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"></line>
+          </svg>
+        `;
+        button.href = "#";
+        button.title = "Locate me";
+        button.style.width = "30px";
+        button.style.height = "30px";
+        button.style.display = "flex";
+        button.style.alignItems = "center";
+        button.style.justifyContent = "center";
+        button.style.color = "#8b5cf6";
+        button.style.transition = "all 0.2s ease";
+        button.style.backgroundColor = "white";
+        button.style.cursor = "pointer";
+        
+        button.onmouseover = () => {
+          button.style.color = "#7c3aed";
+          button.style.backgroundColor = "#f3f4f6";
+        };
+        
+        button.onmouseout = () => {
+          button.style.color = "#8b5cf6";
+          button.style.backgroundColor = "white";
+        };
+        
+        L.DomEvent.on(button, "click", (e) => {
+          L.DomEvent.preventDefault(e);
+          if (userLocationRef.current) {
+            map.setView([userLocationRef.current.lat, userLocationRef.current.lng], 13, {
+              animate: true,
+              duration: 0.5,
+            });
+          }
+        });
+        
+        return container;
+      },
+    });
 
+    new LocateControl({ position: "bottomright" }).addTo(map);
+
+    // --- Visited radius circles (simplified - use default renderer) ---
     const VISITED_RADIUS_METERS = 100;
     let updateFrameId: number | null = null;
+
+    function addVisitedArea(lat: number, lng: number) {
+      // Plain L.circle with default renderer - no custom pane roulette wheel
+      L.circle([lat, lng], {
+        radius: VISITED_RADIUS_METERS,
+        stroke: true,
+        color: "#eab308",
+        opacity: 0.5,
+        weight: 2,
+        dashArray: "5, 5",
+        fillColor: "#eab308",
+        fillOpacity: 0.25,
+      }).addTo(map);
+    }
 
     // Clip the streets pane to circles at the user's location and every
     // memory, so the labelled Voyager tiles are only visible inside
@@ -522,6 +581,7 @@ export default function Map({
       const subpaths: string[] = [];
       const loc = userLocationRef.current;
       if (loc) subpaths.push(circleSubpath(loc.lat, loc.lng));
+      // Use current memories from ref, not hardcoded INITIAL_SAMPLE_MEMORIES
       memoriesRef.current.forEach((m) =>
         subpaths.push(circleSubpath(m.lat, m.lng))
       );
@@ -553,31 +613,12 @@ export default function Map({
     // Initial update
     updateStreetsMask();
 
-    function addVisitedArea(lat: number, lng: number) {
-      const circle = L.circle([lat, lng], {
-        pane: "visitedPane",
-        radius: VISITED_RADIUS_METERS,
-        stroke: true,
-        color: "rgba(234, 179, 8, 0.5)",
-        weight: 2,
-        dashArray: "5, 5",
-        fillColor: "rgba(234, 179, 8, 0.25)",
-        fillOpacity: 0.25,
-      });
-
-      memoryVisitedAreasRef.current?.addLayer(circle);
-    }
-
-    updateStreetsMaskRef.current = updateStreetsMask;
-    addVisitedAreaRef.current = addVisitedArea;
-
     // Geolocation: center + visited circle + marker
     if (navigator.geolocation) {
       navigator.geolocation.getCurrentPosition(
         (pos) => {
           const { latitude, longitude } = pos.coords;
           userLocationRef.current = L.latLng(latitude, longitude);
-          setCurrentLocation({ lat: latitude, lng: longitude });
           
           // Ensure map is ready and has proper dimensions before setView
           if (!mapInstanceRef.current) return;
@@ -592,17 +633,10 @@ export default function Map({
               if (mapInstanceRef.current && container.offsetWidth > 0) {
                 mapInstanceRef.current.invalidateSize();
                 mapInstanceRef.current.setView([latitude, longitude], 13, { animate: true });
-                L.circle([latitude, longitude], {
-                  pane: "visitedPane",
-                  radius: VISITED_RADIUS_METERS,
-                  stroke: true,
-                  color: "rgba(234, 179, 8, 0.5)",
-                  weight: 2,
-                  dashArray: "5, 5",
-                  fillColor: "rgba(234, 179, 8, 0.25)",
-                  fillOpacity: 0.25,
-                }).addTo(map);
-                updateStreetsMask();
+                mapInstanceRef.current.whenReady(() => {
+                  addVisitedArea(latitude, longitude);
+                  updateStreetsMask();
+                });
               }
             });
             return;
@@ -612,17 +646,11 @@ export default function Map({
           map.invalidateSize();
           map.setView([latitude, longitude], 13, { animate: true });
           
-          L.circle([latitude, longitude], {
-            pane: "visitedPane",
-            radius: VISITED_RADIUS_METERS,
-            stroke: true,
-            color: "rgba(234, 179, 8, 0.5)",
-            weight: 2,
-            dashArray: "5, 5",
-            fillColor: "rgba(234, 179, 8, 0.25)",
-            fillOpacity: 0.25,
-          }).addTo(map);
-          updateStreetsMask();
+          // Use map.whenReady to ensure pane renderer is ready
+          map.whenReady(() => {
+            addVisitedArea(latitude, longitude);
+            updateStreetsMask();
+          });
 
           const youAreHereIcon = L.divIcon({
             className: "",
@@ -672,6 +700,40 @@ export default function Map({
       );
     }
 
+    // Memory markers - add only when map is ready
+    map.whenReady(() => {
+      INITIAL_SAMPLE_MEMORIES.forEach((memory) => {
+        addVisitedArea(memory.lat, memory.lng);
+
+        const marker = L.marker([memory.lat, memory.lng], {
+          icon: createMemoryIcon(),
+        }).addTo(map);
+
+        marker.bindPopup(
+          `<div style="
+            background: rgba(17, 24, 39, 0.97);
+            border: 1px solid rgba(139, 92, 246, 0.4);
+            border-radius: 12px;
+            padding: 14px 16px;
+            min-width: 220px;
+            font-family: inherit;
+            box-shadow: 0 0 20px rgba(139, 92, 246, 0.15);
+          ">
+            <div style="font-size: 22px; margin-bottom: 6px;">${memory.emoji}</div>
+            <div style="font-size: 15px; font-weight: 700; color: #f9fafb; margin-bottom: 2px;">${memory.title}</div>
+            <div style="font-size: 11px; color: rgba(139, 92, 246, 0.9); margin-bottom: 8px; letter-spacing: 0.05em;">
+              📍 ${memory.location} &nbsp;·&nbsp; ${memory.date}
+            </div>
+            <div style="font-size: 12px; color: #9ca3af; line-height: 1.5;">${memory.caption}</div>
+          </div>`,
+          {
+            className: "memory-popup",
+            maxWidth: 280,
+          }
+        );
+      });
+    });
+
     return () => {
       if (updateFrameId !== null) {
         cancelAnimationFrame(updateFrameId);
@@ -682,51 +744,6 @@ export default function Map({
       }
     };
   }, []);
-
-  useEffect(() => {
-    let isCancelled = false;
-
-    async function loadWalletMemories() {
-      if (!address || !isConnected) {
-        setMemoryLoadError("");
-        setIsLoadingMemories(false);
-        setMemories(INITIAL_SAMPLE_MEMORIES);
-        return;
-      }
-
-      setIsLoadingMemories(true);
-      setMemoryLoadError("");
-
-      try {
-        const decentralizedMemories = await loadDecentralizedMemories({
-          poster: address as Address,
-        });
-
-        if (!isCancelled) {
-          setMemories(decentralizedMemories.map(decentralizedMemoryToMapMemory));
-        }
-      } catch (error) {
-        if (!isCancelled) {
-          setMemories([]);
-          setMemoryLoadError(
-            error instanceof Error
-              ? error.message
-              : "Unable to load decentralized memories"
-          );
-        }
-      } finally {
-        if (!isCancelled) {
-          setIsLoadingMemories(false);
-        }
-      }
-    }
-
-    loadWalletMemories();
-
-    return () => {
-      isCancelled = true;
-    };
-  }, [address, isConnected]);
 
   // Update markers when memories change
   useEffect(() => {
@@ -741,17 +758,12 @@ export default function Map({
       }
     });
 
-    memoryVisitedAreasRef.current?.clearLayers();
-    memories.forEach((memory) => {
-      addMemoryMarker(memory, map);
-      addVisitedAreaRef.current(memory.lat, memory.lng);
-    });
-    updateStreetsMaskRef.current();
+    // Add all current memories as markers
+    memories.forEach((memory) => addMemoryMarker(memory, map));
   }, [memories]);
 
   const handleSaveMemory = (memory: MemoryData) => {
     setMemories((prev) => [...prev, memory]);
-    requestAnimationFrame(() => updateStreetsMaskRef.current());
   };
 
   return (
@@ -768,26 +780,13 @@ export default function Map({
         style={{ width: "100%", height: "100%", minHeight: "100vh" }}
       />
 
-      {(isLoadingMemories || memoryLoadError || (isConnected && memories.length === 0)) && (
-        <div className="absolute left-6 bottom-8 z-[1000] max-w-xs rounded-lg border border-purple-500/30 bg-gray-950/90 px-4 py-3 text-sm text-gray-200 shadow-lg shadow-purple-950/30">
-          {isLoadingMemories && "Loading your onchain memories..."}
-          {memoryLoadError && (
-            <span className="text-amber-300">
-              Unable to load memories: {memoryLoadError}
-            </span>
-          )}
-          {!isLoadingMemories && !memoryLoadError && isConnected && memories.length === 0 && (
-            "No memories found for this wallet yet."
-          )}
-        </div>
-      )}
-
       {/* Add Memory Modal */}
       <AddMemoryModal
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onSave={handleSaveMemory}
-        currentLocation={currentLocation}
+        map={mapInstanceRef.current}
+        currentLocation={userLocationRef.current ? { lat: userLocationRef.current.lat, lng: userLocationRef.current.lng } : undefined}
       />
 
       {/* Memory Detail Modal */}

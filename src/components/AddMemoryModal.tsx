@@ -71,7 +71,6 @@ export default function AddMemoryModal({
   const [photoFiles, setPhotoFiles] = useState<File[]>([]);
   const [title, setTitle] = useState("");
   const [caption, setCaption] = useState("");
-  const [selectedEmoji] = useState("");
   const [locationCoords, setLocationCoords] = useState<{
     lat: number;
     lng: number;
@@ -87,6 +86,8 @@ export default function AddMemoryModal({
   const dragRef = useRef<HTMLDivElement>(null);
   const mapPickerRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
+  const markerRef = useRef<L.Marker | null>(null);
+  const suggestionsRef = useRef<HTMLDivElement>(null);
 
   const handlePhotoSelect = useCallback((files: FileList) => {
     const imageFiles = Array.from(files).filter((file) =>
@@ -149,6 +150,21 @@ export default function AddMemoryModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
+  // Close suggestions when clicking outside
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (suggestionsRef.current && !suggestionsRef.current.contains(event.target as Node)) {
+        const input = event.target as HTMLElement;
+        if (!input.classList.contains("location-input")) {
+          setShowSuggestions(false);
+        }
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => document.removeEventListener("mousedown", handleClickOutside);
+  }, []);
+
   const initMapPicker = () => {
     if (!mapPickerRef.current || mapInstanceRef.current) return;
 
@@ -174,33 +190,36 @@ export default function AddMemoryModal({
       }
     ).addTo(pickerMap);
 
-    // Add clicked location marker
-    if (locationCoords) {
-      L.marker([locationCoords.lat, locationCoords.lng], {
-        icon: L.icon({
-          iconUrl:
-            "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-violet.png",
-          shadowUrl:
-            "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
-          iconSize: [25, 41],
-          iconAnchor: [12, 41],
-          popupAnchor: [1, -34],
-          shadowSize: [41, 41],
-        }),
-      }).addTo(pickerMap);
-    }
+    // Add initial marker if location exists
+    pickerMap.whenReady(() => {
+      if (locationCoords) {
+        markerRef.current = L.marker([locationCoords.lat, locationCoords.lng], {
+          icon: L.icon({
+            iconUrl:
+              "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-violet.png",
+            shadowUrl:
+              "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
+            iconSize: [25, 41],
+            iconAnchor: [12, 41],
+            popupAnchor: [1, -34],
+            shadowSize: [41, 41],
+          }),
+        }).addTo(pickerMap);
+      }
+    });
 
     // Click to select location
     const onMapClick = (e: L.LeafletMouseEvent) => {
       setUploadedMemory(null);
       setLocationCoords({ lat: e.latlng.lat, lng: e.latlng.lng });
-      // Update marker
-      pickerMap.eachLayer((layer) => {
-        if (layer instanceof L.Marker) {
-          pickerMap.removeLayer(layer);
-        }
-      });
-      L.marker([e.latlng.lat, e.latlng.lng], {
+      
+      // Remove old marker if exists
+      if (markerRef.current) {
+        pickerMap.removeLayer(markerRef.current);
+      }
+
+      // Add new marker
+      markerRef.current = L.marker([e.latlng.lat, e.latlng.lng], {
         icon: L.icon({
           iconUrl:
             "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-violet.png",
@@ -343,7 +362,6 @@ export default function AddMemoryModal({
     setPhotoFiles([]);
     setTitle("");
     setCaption("");
-    // Emoji no longer used
     setLocationCoords(null);
     setManualLocation("");
     setSubmitStep("idle");
@@ -494,8 +512,8 @@ export default function AddMemoryModal({
 
           {step === "location" && (
             <div className="space-y-6">
-              {/* Location Name */}
-              <div>
+              {/* Location Name with Autocomplete */}
+              <div className="relative">
                 <label className="block text-sm font-medium text-gray-300 mb-2">
                   Location Name (Optional)
                 </label>
@@ -519,7 +537,6 @@ export default function AddMemoryModal({
                 <div
                   ref={mapPickerRef}
                   className="w-full h-72 rounded-lg border border-purple-500/30 overflow-hidden bg-slate-900"
-                  onLoad={initMapPicker}
                 />
                 {!mapPickerRef.current?.childElementCount && (
                   <button
