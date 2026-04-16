@@ -1,66 +1,104 @@
-## Foundry
+# Matjip Contracts
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+Foundry contracts for anchoring Matjip memories on Status Network Hoodi.
 
-Foundry consists of:
+## MemoryRegistry
 
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+`MemoryRegistry` is deployed once, then the web app calls the same deployed
+contract for every saved memory.
 
-## Documentation
+The contract stores only a small public anchor:
 
-https://book.getfoundry.sh/
+- poster address (`msg.sender`)
+- IPFS metadata CID
+- metadata hash
+- rounded latitude and longitude in E6 format
+- block timestamp
 
-## Usage
+Photos, title, description, and location text stay offchain in Pinata/IPFS
+metadata. IPFS CIDs are public, so private memories should encrypt metadata
+and images before uploading to Pinata.
 
-### Build
+## API
 
-```shell
-$ forge build
+```solidity
+function createMemory(
+    string calldata metadataCid,
+    bytes32 metadataHash,
+    int32 latE6,
+    int32 lngE6
+) external returns (uint256 memoryId);
 ```
 
-### Test
+`memoryId` is zero-based. The first memory returns `0`, the second returns `1`,
+and `memoryCount()` returns the total number of memories.
 
-```shell
-$ forge test
+The contract emits:
+
+```solidity
+event MemoryCreated(
+    uint256 indexed memoryId,
+    address indexed poster,
+    string metadataCid,
+    bytes32 metadataHash,
+    int32 latE6,
+    int32 lngE6,
+    uint64 createdAt
+);
 ```
 
-### Format
+## Status Hoodi
 
-```shell
-$ forge fmt
+Karma and gasless eligibility are handled by Status Network, not by this
+contract. The frontend/backend should check the user's Karma and estimate the
+transaction from the user's Karma-bearing wallet. Eligible users can call
+`createMemory` gaslessly on Hoodi.
+
+Hoodi chain ID:
+
+```text
+374
 ```
 
-### Gas Snapshots
+## Environment
+
+Create `contract/.env` or export these values before deployment:
 
 ```shell
-$ forge snapshot
+PRIVATE_KEY=
+HOODI_RPC_URL=
 ```
 
-### Anvil
+After deployment, set this in the web app:
 
 ```shell
-$ anvil
+NEXT_PUBLIC_MEMORY_REGISTRY_ADDRESS=<deployed_contract_address>
 ```
 
-### Deploy
+## Commands
+
+Run tests:
 
 ```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
+forge test
 ```
 
-### Cast
+Build:
 
 ```shell
-$ cast <subcommand>
+forge build
 ```
 
-### Help
+Deploy to Status Hoodi:
 
 ```shell
-$ forge --help
-$ anvil --help
-$ cast --help
+forge script script/MatjipMemoryMap.s.sol:MatjipMemoryMapScript \
+  --rpc-url $HOODI_RPC_URL \
+  --private-key $PRIVATE_KEY \
+  --broadcast \
+  --with-gas-price 200gwei \
+  --priority-gas-price 100gwei \
+  --slow
 ```
+
+The deploy script uses the private key passed by the Foundry CLI.

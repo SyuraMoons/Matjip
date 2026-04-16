@@ -32,6 +32,7 @@ yarn-error.log*
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 
 # vercel
 .vercel
@@ -39,3 +40,21 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# foundry contract build output
+/contract/cache/
+/contract/out/
+
+# contract local secrets
+/contract/.env
+
+# nested contract workflow files do not run from the root repo
+/contract/.github/
+
+# vendored forge-std: keep only the Solidity sources and licenses
+/contract/lib/forge-std/*
+!/contract/lib/forge-std/src/
+!/contract/lib/forge-std/src/**
+!/contract/lib/forge-std/LICENSE-APACHE
+!/contract/lib/forge-std/LICENSE-MIT
+contract/broadcast/
