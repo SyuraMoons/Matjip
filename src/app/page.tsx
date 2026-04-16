@@ -1,10 +1,15 @@
+"use client";
+
+import { useState } from "react";
 import MapWrapper from "@/components/MapWrapper";
 
 export default function Home() {
+  const [isModalOpen, setIsModalOpen] = useState(false);
+
   return (
     <div className="relative w-full h-screen overflow-hidden bg-gray-950">
       {/* Full-screen map */}
-      <MapWrapper />
+      <MapWrapper isModalOpen={isModalOpen} setIsModalOpen={setIsModalOpen} />
 
       {/* Header overlay */}
       <div className="absolute top-0 left-0 right-0 z-[1000] flex items-center justify-between px-6 py-4 bg-gradient-to-b from-gray-950/90 to-transparent pointer-events-none">
@@ -16,7 +21,10 @@ export default function Home() {
             Your world, mapped in memories
           </p>
         </div>
-        <button className="pointer-events-auto bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium px-4 py-2 rounded-full transition-colors shadow-lg shadow-purple-900/50">
+        <button
+          onClick={() => setIsModalOpen(true)}
+          className="pointer-events-auto bg-purple-600 hover:bg-purple-500 text-white text-sm font-medium px-4 py-2 rounded-full transition-colors shadow-lg shadow-purple-900/50"
+        >
           + Add Memory
         </button>
       </div>
