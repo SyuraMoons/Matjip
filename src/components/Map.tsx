@@ -1,10 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { useAppKitAccount } from "@reown/appkit/react";
 import L from "leaflet";
+import type { Address } from "viem";
 import "leaflet/dist/leaflet.css";
 import AddMemoryModal from "./AddMemoryModal";
 import type { MemoryData } from "./AddMemoryModal";
+import {
+  decentralizedMemoryToMapMemory,
+  loadDecentralizedMemories,
+} from "@/lib/decentralizedMemories";
 
 // Fix default marker icons broken by webpack
 delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
@@ -301,11 +307,15 @@ export default function Map({
   const userMarkerRef = useRef<L.Marker | null>(null);
   const userLocationRef = useRef<L.LatLng | null>(null);
   const streetsPaneRef = useRef<HTMLElement | null>(null);
+  const updateStreetsMaskRef = useRef<(() => void) | null>(null);
+  const { address, isConnected } = useAppKitAccount({ namespace: "eip155" });
 
   const [memories, setMemories] = useState<MemoryData[]>([]);
   const [selectedMemory, setSelectedMemory] = useState<MemoryData | null>(null);
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isLocating, setIsLocating] = useState(true);
+  const [isLoadingMemories, setIsLoadingMemories] = useState(false);
+  const [memoryLoadError, setMemoryLoadError] = useState("");
   const memoriesRef = useRef<MemoryData[]>([]);
 
   // Keep memoriesRef in sync with memories state
@@ -630,6 +640,7 @@ export default function Map({
       }
       pane.style.clipPath = `path('${subpaths.join(" ")}')`;
     }
+    updateStreetsMaskRef.current = updateStreetsMask;
 
     // Smooth continuous update during interactions
     function scheduleUpdate() {
@@ -756,8 +767,65 @@ export default function Map({
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
       }
+      updateStreetsMaskRef.current = null;
     };
   }, []);
+
+  const reloadMemories = async (poster: Address) => {
+    setIsLoadingMemories(true);
+    setMemoryLoadError("");
+
+    try {
+      const loaded = await loadDecentralizedMemories({ poster });
+      setMemories(loaded.map(decentralizedMemoryToMapMemory));
+    } catch (error) {
+      setMemoryLoadError(
+        error instanceof Error ? error.message : "Unable to load memories"
+      );
+    } finally {
+      setIsLoadingMemories(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isConnected || !address) {
+      setMemories([]);
+      setIsLoadingMemories(false);
+      setMemoryLoadError("");
+      return;
+    }
+
+    let isCurrent = true;
+
+    async function loadWalletMemories() {
+      setIsLoadingMemories(true);
+      setMemoryLoadError("");
+
+      try {
+        const loaded = await loadDecentralizedMemories({
+          poster: address as Address,
+        });
+
+        if (!isCurrent) return;
+        setMemories(loaded.map(decentralizedMemoryToMapMemory));
+      } catch (error) {
+        if (!isCurrent) return;
+        setMemoryLoadError(
+          error instanceof Error ? error.message : "Unable to load memories"
+        );
+      } finally {
+        if (isCurrent) {
+          setIsLoadingMemories(false);
+        }
+      }
+    }
+
+    loadWalletMemories();
+
+    return () => {
+      isCurrent = false;
+    };
+  }, [address, isConnected]);
 
   // Update markers when memories change
   useEffect(() => {
@@ -774,11 +842,17 @@ export default function Map({
 
     // Add all current memories as markers
     memories.forEach((memory) => addMemoryMarker(memory, map));
+    updateStreetsMaskRef.current?.();
   }, [memories]);
 
-  const handleSaveMemory = (memory: MemoryData) => {
+  const handleSaveMemory = async (memory: MemoryData) => {
     setMemories((prev) => [...prev, memory]);
+
+    if (!address) return;
+    await reloadMemories(address as Address);
   };
+
+  const showLoadingOverlay = isLocating || isLoadingMemories;
 
   return (
     <div
@@ -804,7 +878,7 @@ export default function Map({
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          opacity: isLocating ? 1 : 0,
+          opacity: showLoadingOverlay ? 1 : 0,
           pointerEvents: "none",
         }}
       >
@@ -819,19 +893,45 @@ export default function Map({
             display: "flex",
           }}
         >
-          {"LOADING".split("").map((ch, i) => (
-            <span
-              key={i}
-              style={{
-                display: "inline-block",
-                animation: `letterWave 0.9s ease-in-out ${i * 0.14}s infinite`,
-              }}
-            >
-              {ch}
-            </span>
-          ))}
+          {(isLoadingMemories ? "SYNCING" : "LOADING")
+            .split("")
+            .map((ch, i) => (
+              <span
+                key={i}
+                style={{
+                  display: "inline-block",
+                  animation: `letterWave 0.9s ease-in-out ${i * 0.14}s infinite`,
+                }}
+              >
+                {ch}
+              </span>
+            ))}
         </div>
       </div>
+
+      {memoryLoadError ? (
+        <div
+          style={{
+            position: "absolute",
+            left: "50%",
+            bottom: "84px",
+            transform: "translateX(-50%)",
+            zIndex: 1000,
+            maxWidth: "min(520px, calc(100vw - 32px))",
+            border: "1px solid rgba(248, 113, 113, 0.45)",
+            borderRadius: "8px",
+            background: "rgba(17, 24, 39, 0.94)",
+            color: "#fecaca",
+            fontSize: "12px",
+            lineHeight: 1.5,
+            padding: "10px 12px",
+            textAlign: "center",
+            pointerEvents: "none",
+          }}
+        >
+          Could not sync onchain memories: {memoryLoadError}
+        </div>
+      ) : null}
 
       {/* Add Memory Modal */}
       <AddMemoryModal

@@ -19,6 +19,7 @@ createAppKit({
   projectId: reownProjectId,
   metadata: appMetadata,
   allowUnsupportedChain: false,
+  enableReconnect: false,
   themeMode: "dark",
   features: {
     analytics: false,
@@ -44,7 +45,11 @@ export default function AppKitProvider({
     | undefined;
 
   return (
-    <WagmiProvider config={wagmiConfig} initialState={initialState}>
+    <WagmiProvider
+      config={wagmiConfig}
+      initialState={initialState}
+      reconnectOnMount={false}
+    >
       <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
     </WagmiProvider>
   );
