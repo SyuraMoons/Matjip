@@ -247,35 +247,6 @@ function computeZoneLevel(group: MemoryData[]): ZoneLevel {
   return { level: 0, multiplier: 1.0 };
 }
 
-// Compute enclosing aura that covers all pins in a connected group
-function computeEnclosingGroupAura(
-  map: L.Map,
-  group: MemoryData[],
-  paddingMeters = 120
-): { center: [number, number]; radiusMeters: number; karma: number } {
-  if (group.length === 0) {
-    return { center: [0, 0], radiusMeters: 0, karma: 0 };
-  }
-
-  const bounds = L.latLngBounds(
-    group.map((m) => [m.lat, m.lng] as [number, number])
-  );
-  const boundsCenter = bounds.getCenter();
-  const center: [number, number] = [boundsCenter.lat, boundsCenter.lng];
-
-  let maxDistanceMeters = 0;
-  for (const memory of group) {
-    const dist = map.distance(center, [memory.lat, memory.lng]);
-    maxDistanceMeters = Math.max(maxDistanceMeters, dist);
-  }
-
-  return {
-    center,
-    radiusMeters: maxDistanceMeters + paddingMeters,
-    karma: group.length,
-  };
-}
-
 // Fetch real route geometry from OSRM API following actual street network
 async function fetchRoutePoints(
   a: MemoryData,
@@ -705,8 +676,6 @@ export default function Map({
   const updateStreetsMaskRef = useRef<(() => void) | null>(null);
   const routePointsRef = useRef<RouteCache>({});
   const routeFetchNonceRef = useRef(0);
-  const karmaAuraLayersRef = useRef<L.Circle[]>([]);
-  const karmaBadgesRef = useRef<L.Marker[]>([]);
   const { address, isConnected } = useAppKitAccount({ namespace: "eip155" });
 
   const [memories, setMemories] = useState<MemoryData[]>([]);
@@ -728,88 +697,6 @@ export default function Map({
   useEffect(() => {
     memoriesRef.current = memories;
   }, [memories]);
-
-  // Render karma group auras (transparent circles showing connected groups and their karma count)
-  const renderKarmaAuras = (
-    map: L.Map,
-    memories: MemoryData[],
-    pairs: Array<[MemoryData, MemoryData]>
-  ) => {
-    // Clear old auras and badges
-    karmaAuraLayersRef.current.forEach((circle) => map.removeLayer(circle));
-    karmaAuraLayersRef.current = [];
-
-    karmaBadgesRef.current.forEach((badge) => map.removeLayer(badge));
-    karmaBadgesRef.current = [];
-
-    if (memories.length === 0) return;
-
-    // Build connected groups
-    const groups = buildConnectedGroups(memories, pairs);
-
-    // Render auras only for groups with 2+ members
-    for (const group of groups) {
-      if (group.length < 2) continue;
-
-      const { center, radiusMeters, karma } = computeEnclosingGroupAura(map, group, 120);
-      const { level, multiplier } = computeZoneLevel(group);
-
-      // Create aura circle - visual overlay
-      const aura = L.circle(center, {
-        radius: radiusMeters,
-        color: "rgba(232, 135, 136, 0.65)",
-        fill: true,
-        fillColor: "rgba(232, 135, 136, 0.12)",
-        fillOpacity: 0.3,
-        weight: 2.5,
-        opacity: 0.7,
-        interactive: false,
-        pane: "overlayPane",
-      }).addTo(map);
-
-      karmaAuraLayersRef.current.push(aura);
-
-      // Create badge showing karma, level, and multiplier
-      const badgeIcon = L.divIcon({
-        className: "",
-        html: `
-          <div style="
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            width: 56px;
-            height: 56px;
-            border-radius: 50%;
-            background: rgba(232, 135, 136, 0.16);
-            border: 1.5px solid rgba(232, 135, 136, 0.45);
-            color: rgba(232, 135, 136, 0.98);
-            box-shadow: 0 0 14px rgba(232, 135, 136, 0.22);
-            text-align: center;
-            line-height: 1.05;
-            backdrop-filter: blur(2px);
-          ">
-            <div style="font-size: 14px; font-weight: 800;">${karma}</div>
-            <div style="font-size: 9px; font-weight: 700; opacity: 0.95;">L${level}</div>
-            <div style="font-size: 9px; font-weight: 700; opacity: 0.95;">x${multiplier.toFixed(1)}</div>
-          </div>
-        `,
-        iconSize: [56, 56],
-        iconAnchor: [28, 28],
-      });
-
-      const badge = L.marker(center, {
-        icon: badgeIcon,
-        interactive: false,
-      }).addTo(map);
-
-      karmaBadgesRef.current.push(badge);
-
-      console.log(
-        `[Aura] karma=${karma}, level=${level}, multiplier=${multiplier}, radius=${radiusMeters.toFixed(0)}m`
-      );
-    }
-  };
 
   const addMemoryMarker = (memory: MemoryData, map: L.Map) => {
     const marker = L.marker([memory.lat, memory.lng], {
@@ -849,18 +736,6 @@ export default function Map({
         typeof memory.createdAt === "number"
           ? memory.createdAt
           : existingMemory.createdAt,
-      reward:
-        typeof memory.reward === "number"
-          ? memory.reward
-          : existingMemory.reward,
-      multiplier:
-        typeof memory.multiplier === "number"
-          ? memory.multiplier
-          : existingMemory.multiplier,
-      zoneLevel:
-        typeof memory.zoneLevel === "number"
-          ? memory.zoneLevel
-          : existingMemory.zoneLevel,
     };
 
     return nextMemories;
@@ -1304,21 +1179,6 @@ export default function Map({
       mapContainer.removeEventListener("wheel", onWheel);
       cancelAnimationFrame(swzRafId);
       if (swzTimeoutId !== null) clearTimeout(swzTimeoutId);
-
-      karmaAuraLayersRef.current.forEach((circle) => {
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.removeLayer(circle);
-        }
-      });
-      karmaAuraLayersRef.current = [];
-
-      karmaBadgesRef.current.forEach((badge) => {
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.removeLayer(badge);
-        }
-      });
-      karmaBadgesRef.current = [];
-
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
@@ -1506,23 +1366,15 @@ export default function Map({
     const map = mapInstanceRef.current;
 
     // Remove all existing markers except the user location marker
+    // (polylines are managed by the route effect)
     map.eachLayer((layer) => {
       if (layer instanceof L.Marker && layer !== userMarkerRef.current) {
-        map.removeLayer(layer);
-      }
-
-      if (layer instanceof L.Polyline) {
         map.removeLayer(layer);
       }
     });
 
     // Add all current memories as markers
     memories.forEach((memory) => addMemoryMarker(memory, map));
-
-    // Render karma auras for connected groups
-    const pairs = buildChronologicalPairs(map, memories, 1500);
-    renderKarmaAuras(map, memories, pairs);
-
     updateStreetsMaskRef.current?.();
   }, [memories]);
 

@@ -255,7 +255,6 @@ export default function AddMemoryModal({
   const markerRef = useRef<L.Marker | null>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const mapInitTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const handlePhotoSelect = useCallback((files: FileList) => {
     const imageFiles = Array.from(files).filter((file) =>
@@ -309,22 +308,11 @@ export default function AddMemoryModal({
   const handleCloseModal = () => {
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
-      debounceTimerRef.current = null;
-    }
-
-    if (mapInitTimerRef.current) {
-      clearTimeout(mapInitTimerRef.current);
-      mapInitTimerRef.current = null;
     }
 
     if (mapInstanceRef.current) {
-      mapInstanceRef.current.off();
       mapInstanceRef.current.remove();
       mapInstanceRef.current = null;
-    }
-
-    if (mapPickerRef.current) {
-      mapPickerRef.current.innerHTML = "";
     }
 
     markerRef.current = null;
@@ -393,42 +381,6 @@ export default function AddMemoryModal({
         setIsSearching(false);
       }
     }, 500);
-
-    // Auto-select first result if exists
-    const timer = setTimeout(() => {
-      if (results.length > 0) {
-        const bestMatch = results[0];
-        setManualLocation(bestMatch.displayName || bestMatch.name);
-        setLocationCoords({ lat: bestMatch.lat, lng: bestMatch.lng });
-        setShowSuggestions(false);
-        setLocationSearchResults([]);
-
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.setView([bestMatch.lat, bestMatch.lng], 8, {
-            animate: false,
-          });
-
-          if (markerRef.current) {
-            mapInstanceRef.current.removeLayer(markerRef.current);
-          }
-
-          markerRef.current = L.marker([bestMatch.lat, bestMatch.lng], {
-            icon: L.icon({
-              iconUrl:
-                "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-violet.png",
-              shadowUrl:
-                "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
-              iconSize: [25, 41],
-              iconAnchor: [12, 41],
-              popupAnchor: [1, -34],
-              shadowSize: [41, 41],
-            }),
-          }).addTo(mapInstanceRef.current);
-        }
-      }
-    }, 1500);
-
-    return () => clearTimeout(timer);
   };
 
   const handleLocationSelect = (location: LocationResult) => {
@@ -439,10 +391,8 @@ export default function AddMemoryModal({
 
     // Auto-pan and pin map if it exists
     if (mapInstanceRef.current) {
-      mapInstanceRef.current.setView([location.lat, location.lng], 8, {
-        animate: false,
-      });
-
+      mapInstanceRef.current.flyTo([location.lat, location.lng], 8);
+      
       // Remove old marker if exists
       if (markerRef.current) {
         mapInstanceRef.current.removeLayer(markerRef.current);
@@ -466,50 +416,26 @@ export default function AddMemoryModal({
 
   // Auto-initialize map when location step is reached
   useEffect(() => {
-    if (!isOpen) return;
-    if (step !== "location") return;
-    if (!mapPickerRef.current) return;
-    if (mapInstanceRef.current) return;
-
-    mapInitTimerRef.current = setTimeout(() => {
-      if (!isOpen) return;
-      if (step !== "location") return;
-      if (!mapPickerRef.current) return;
-      if (mapInstanceRef.current) return;
-
-      initMapPicker();
-      mapInitTimerRef.current = null;
-    }, 100);
-
-    return () => {
-      if (mapInitTimerRef.current) {
-        clearTimeout(mapInitTimerRef.current);
-        mapInitTimerRef.current = null;
-      }
-    };
-  }, [isOpen, step]);
+    if (step === "location" && mapPickerRef.current && !mapInstanceRef.current) {
+      // Use setTimeout to ensure the DOM is ready
+      setTimeout(() => {
+        initMapPicker();
+      }, 100);
+    }
+    // Leaflet map initialization is intentionally one-shot per modal session.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
 
   // Clean up when modal closes
   useEffect(() => {
     if (!isOpen) {
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
-        debounceTimerRef.current = null;
-      }
-
-      if (mapInitTimerRef.current) {
-        clearTimeout(mapInitTimerRef.current);
-        mapInitTimerRef.current = null;
       }
 
       if (mapInstanceRef.current) {
-        mapInstanceRef.current.off();
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
-      }
-
-      if (mapPickerRef.current) {
-        mapPickerRef.current.innerHTML = "";
       }
 
       markerRef.current = null;
@@ -539,18 +465,6 @@ export default function AddMemoryModal({
     return () => {
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
-        debounceTimerRef.current = null;
-      }
-
-      if (mapInitTimerRef.current) {
-        clearTimeout(mapInitTimerRef.current);
-        mapInitTimerRef.current = null;
-      }
-
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.off();
-        mapInstanceRef.current.remove();
-        mapInstanceRef.current = null;
       }
     };
   }, []);
@@ -562,31 +476,20 @@ export default function AddMemoryModal({
   }, [uploadedMemory]);
 
   const initMapPicker = () => {
-    if (!mapPickerRef.current) return;
-
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.off();
-      mapInstanceRef.current.remove();
-      mapInstanceRef.current = null;
-    }
-
-    mapPickerRef.current.innerHTML = "";
+    if (!mapPickerRef.current || mapInstanceRef.current) return;
 
     const pickerMap = L.map(mapPickerRef.current, {
       center: locationCoords ? [locationCoords.lat, locationCoords.lng] : [20, 10],
       zoom: locationCoords ? 8 : 2,
       zoomControl: true,
       attributionControl: false,
-      zoomAnimation: false,
-      fadeAnimation: false,
-      markerZoomAnimation: false,
     });
 
     mapInstanceRef.current = pickerMap;
     setIsMapLoaded(true);
 
+    // Force map to recalculate size after initialization
     setTimeout(() => {
-      if (!mapInstanceRef.current) return;
       pickerMap.invalidateSize();
     }, 100);
 
@@ -598,8 +501,6 @@ export default function AddMemoryModal({
 
     // Add initial marker if location exists
     pickerMap.whenReady(() => {
-      if (!mapInstanceRef.current) return;
-
       if (locationCoords) {
         markerRef.current = L.marker([locationCoords.lat, locationCoords.lng], {
           icon: L.icon({
@@ -833,28 +734,16 @@ export default function AddMemoryModal({
     setShowSuggestions(false);
     setLocationSearchResults([]);
     setIsMapLoaded(false);
-
+    
+    // Clear debounce timer
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
-      debounceTimerRef.current = null;
     }
-
-    if (mapInitTimerRef.current) {
-      clearTimeout(mapInitTimerRef.current);
-      mapInitTimerRef.current = null;
-    }
-
+    
     if (mapInstanceRef.current) {
-      mapInstanceRef.current.off();
       mapInstanceRef.current.remove();
       mapInstanceRef.current = null;
     }
-
-    if (mapPickerRef.current) {
-      mapPickerRef.current.innerHTML = "";
-    }
-
-    markerRef.current = null;
   };
 
   const isSubmitting = submitStep !== "idle";
