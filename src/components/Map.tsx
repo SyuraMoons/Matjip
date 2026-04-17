@@ -104,6 +104,11 @@ async function fetchRoutePoints(
       endLng: String(b.lng),
     });
 
+    console.log(`[Route] Fetching from ${a.id} to ${b.id}`, {
+      from: [a.lat, a.lng],
+      to: [b.lat, b.lng],
+    });
+
     const response = await fetch(`/api/routes/path?${params.toString()}`, {
       cache: "no-store",
     });
@@ -115,6 +120,12 @@ async function fetchRoutePoints(
       !Array.isArray(data?.points) ||
       data.points.length < 2
     ) {
+      console.warn(`[Route] Failed to get route from ${a.id} to ${b.id}`, {
+        ok: response.ok,
+        hasPoints: Array.isArray(data?.points),
+        pointsLength: data?.points?.length,
+        error: data?.error,
+      });
       // Honest fallback if route fails
       return [
         [a.lat, a.lng],
@@ -1095,6 +1106,7 @@ export default function Map({
 
     async function loadRoutes() {
       const pairs = buildChronologicalPairs(map, memories, 400);
+      console.log(`[Routes] Found ${pairs.length} chronological pairs within 400m`, pairs);
       const nextCache: RouteCache = {};
 
       for (const [a, b] of pairs) {
@@ -1102,6 +1114,7 @@ export default function Map({
         const existing = routePointsRef.current[key];
 
         if (existing) {
+          console.log(`[Routes] Using cached route for ${key}`);
           nextCache[key] = existing;
           continue;
         }
@@ -1109,6 +1122,7 @@ export default function Map({
         const points = await fetchRoutePoints(a, b);
         if (cancelled || routeFetchNonceRef.current !== nonce) return;
         nextCache[key] = points;
+        console.log(`[Routes] Cached route for ${key}, points count: ${points.length}`);
       }
 
       if (cancelled || routeFetchNonceRef.current !== nonce) return;
@@ -1132,17 +1146,21 @@ export default function Map({
       });
 
       const routePairs = buildChronologicalPairs(mapNow, memoriesRef.current, 400);
+      let corridorCount = 0;
       routePairs.forEach(([a, b]) => {
         const key = getRouteKey(a, b);
         const points = routePointsRef.current[key];
+        console.log(`[Mask] Checking corridor ${key}: exists=${!!points}, length=${points?.length}`);
         if (points && points.length >= 2) {
           const corridorPath = routeCorridorToSubpath(mapNow, points, 35);
           if (corridorPath) {
             subpaths.push(corridorPath);
+            corridorCount++;
           }
         }
       });
 
+      console.log(`[Mask] Total subpaths: ${subpaths.length} (circles + ${corridorCount} corridors)`);
       pane.style.clipPath =
         subpaths.length > 0
           ? `path('${subpaths.join(" ")}')`
