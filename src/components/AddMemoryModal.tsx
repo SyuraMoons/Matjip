@@ -289,12 +289,10 @@ export default function AddMemoryModal({
     }, 100);
 
     // Add basic tile layer
-    L.tileLayer(
-      "https://tiles.stadiamaps.com/tiles/stamen_toner_background/{z}/{x}/{y}.png",
-      {
-        maxZoom: 18,
-      }
-    ).addTo(pickerMap);
+    L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      attribution: "&copy; OpenStreetMap contributors",
+      maxZoom: 19,
+    }).addTo(pickerMap);
 
     // Add initial marker if location exists
     pickerMap.whenReady(() => {
