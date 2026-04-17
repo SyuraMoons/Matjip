@@ -67,26 +67,59 @@ function getPlaceScaleRadius(memory: MemoryData): number {
 }
 
 function sortMemoriesChronologically(memories: MemoryData[]): MemoryData[] {
-  return [...memories].sort((a, b) => a.id - b.id);
+  return [...memories].sort((a, b) => {
+    const aTime =
+      typeof a.createdAt === "number"
+        ? a.createdAt
+        : a.date
+          ? new Date(a.date).getTime()
+          : 0;
+
+    const bTime =
+      typeof b.createdAt === "number"
+        ? b.createdAt
+        : b.date
+          ? new Date(b.date).getTime()
+          : 0;
+
+    if (aTime !== bTime) {
+      return aTime - bTime;
+    }
+
+    return a.id - b.id;
+  });
 }
 
 function buildChronologicalPairs(
   map: L.Map,
   memories: MemoryData[],
-  thresholdMeters = 400
+  thresholdMeters = 1500
 ): Array<[MemoryData, MemoryData]> {
   const sorted = sortMemoriesChronologically(memories);
   const pairs: Array<[MemoryData, MemoryData]> = [];
 
   for (let i = 0; i < sorted.length - 1; i++) {
-    const a = sorted[i];
-    const b = sorted[i + 1];
-    const distance = map.distance([a.lat, a.lng], [b.lat, b.lng]);
+    const current = sorted[i];
+    const next = sorted[i + 1];
+
+    const distance = map.distance(
+      [current.lat, current.lng],
+      [next.lat, next.lng]
+    );
 
     if (distance <= thresholdMeters) {
-      pairs.push([a, b]);
+      pairs.push([current, next]);
     }
   }
+
+  console.log(
+    `[Routes] Found ${pairs.length} strict chronological pairs within ${thresholdMeters}m`,
+    pairs.map(([a, b]) => ({
+      from: { id: a.id, createdAt: a.createdAt, title: a.title },
+      to: { id: b.id, createdAt: b.createdAt, title: b.title },
+      distance: map.distance([a.lat, a.lng], [b.lat, b.lng]),
+    }))
+  );
 
   return pairs;
 }
@@ -572,7 +605,16 @@ export default function Map({
     }
 
     const nextMemories = [...currentMemories];
-    nextMemories[existingIndex] = memory;
+    const existingMemory = nextMemories[existingIndex];
+
+    nextMemories[existingIndex] = {
+      ...memory,
+      createdAt:
+        typeof memory.createdAt === "number"
+          ? memory.createdAt
+          : existingMemory.createdAt,
+    };
+
     return nextMemories;
   };
 
@@ -872,7 +914,7 @@ export default function Map({
       });
 
       // Add route corridors between chronological nearby pairs using cached route geometry
-      const pairs = buildChronologicalPairs(map, memoriesRef.current, 400);
+      const pairs = buildChronologicalPairs(map, memoriesRef.current, 1500);
       pairs.forEach(([a, b]) => {
         const key = getRouteKey(a, b);
         const points = routePointsRef.current[key];
@@ -1105,8 +1147,8 @@ export default function Map({
     const nonce = ++routeFetchNonceRef.current;
 
     async function loadRoutes() {
-      const pairs = buildChronologicalPairs(map, memories, 400);
-      console.log(`[Routes] Found ${pairs.length} chronological pairs within 400m`, pairs);
+      const pairs = buildChronologicalPairs(map, memories, 1500);
+      console.log(`[Routes] Found ${pairs.length} chronological-nearest pairs within 1500m`, pairs);
       const nextCache: RouteCache = {};
 
       for (const [a, b] of pairs) {
@@ -1123,6 +1165,13 @@ export default function Map({
         if (cancelled || routeFetchNonceRef.current !== nonce) return;
         nextCache[key] = points;
         console.log(`[Routes] Cached route for ${key}, points count: ${points.length}`);
+
+        // Draw route pathway as subtle gray
+        L.polyline(points, {
+          color: "#a0a0a0",
+          weight: 3,
+          opacity: 0.6,
+        }).addTo(map);
       }
 
       if (cancelled || routeFetchNonceRef.current !== nonce) return;
@@ -1145,7 +1194,7 @@ export default function Map({
         subpaths.push(createCircleSubpath(mapNow, memory.lat, memory.lng, radius));
       });
 
-      const routePairs = buildChronologicalPairs(mapNow, memoriesRef.current, 400);
+      const routePairs = buildChronologicalPairs(mapNow, memoriesRef.current, 1500);
       let corridorCount = 0;
       routePairs.forEach(([a, b]) => {
         const key = getRouteKey(a, b);
@@ -1183,6 +1232,10 @@ export default function Map({
     // Remove all existing markers except the user location marker
     map.eachLayer((layer) => {
       if (layer instanceof L.Marker && layer !== userMarkerRef.current) {
+        map.removeLayer(layer);
+      }
+
+      if (layer instanceof L.Polyline) {
         map.removeLayer(layer);
       }
     });
