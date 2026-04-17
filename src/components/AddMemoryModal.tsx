@@ -26,6 +26,9 @@ export type MemoryData = {
   metadataCid?: string;
   metadataHash?: `0x${string}`;
   txHash?: Hash;
+  reward?: number;
+  multiplier?: number;
+  zoneLevel?: number;
 };
 
 type KarmaInfo = {
