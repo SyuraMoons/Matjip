@@ -69,6 +69,20 @@ NEXT_PUBLIC_MEMORY_REGISTRY_ADDRESS=<deployed_contract_address>
 Matjip Karma is not official Status Karma and does not control real sequencer
 gasless eligibility.
 
+## Hoodi Gasless Fallback
+
+Status Network Hoodi currently has an RLN prover registration bug where fully
+gasless transactions can fail with:
+
+```text
+RLN prover rejected transaction (NOT_FOUND): Sender not registered
+```
+
+The current Status builder guidance is to keep the production integration in
+place by calling `linea_estimateGas`, then submit with the returned gas values
+and paid gas until the prover issue is fixed. Matjip follows that flow in the
+web app before calling `createMemory`.
+
 ## Deployed Contracts
 
 Latest Status Hoodi deployment:
@@ -90,9 +104,11 @@ migrate to the new registry.
 ## Status Hoodi
 
 Karma and gasless eligibility are handled by Status Network, not by this
-contract. The frontend/backend should check the user's Karma and estimate the
-transaction from the user's Karma-bearing wallet. Eligible users can call
-`createMemory` gaslessly on Hoodi.
+contract. The frontend/backend checks the user's Karma and estimates the
+transaction from the user's Karma-bearing wallet with `linea_estimateGas`.
+During the Hoodi RLN outage, the app uses the returned estimate as a paid
+fallback; after the network fix, the same estimate-first path is the gasless
+submission path.
 
 Hoodi chain ID:
 
@@ -130,7 +146,7 @@ Build:
 forge build
 ```
 
-Deploy to Status Hoodi:
+Deploy to Status Hoodi with the current paid fallback:
 
 ```shell
 forge script script/MatjipMemoryMap.s.sol:MatjipMemoryMapScript \

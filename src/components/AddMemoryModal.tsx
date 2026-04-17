@@ -561,7 +561,7 @@ export default function AddMemoryModal({
         setSubmitNotice(
           karmaInfo.source === "matjip"
             ? "No Matjip Karma yet. Add connected memories to earn demo Karma."
-            : "No official Status Karma found yet. The wallet can still submit; fees are estimated from Status Network."
+            : "No official Status Karma found yet. The wallet can still submit with the current Hoodi paid fallback."
         );
       }
     } catch (error) {
@@ -650,7 +650,7 @@ export default function AddMemoryModal({
         );
       } else {
         setSubmitNotice(
-          "This memory may help complete a 5-memory connected area. Choose the premium fee path to continue now."
+          "This memory may help complete a 5-memory connected area. Hoodi gasless is temporarily blocked by the RLN prover bug, so continue with the Status estimate fallback."
         );
       }
     } catch (error) {
@@ -661,7 +661,7 @@ export default function AddMemoryModal({
     }
   };
 
-  const confirmPremiumSave = async () => {
+  const confirmEstimatedSave = async () => {
     if (!preparedSave) {
       await prepareSave();
       return;
@@ -673,7 +673,7 @@ export default function AddMemoryModal({
       setSubmitNotice(
         preparedSave.isGaslessEstimate
           ? "Confirm the current wallet transaction. Status Network estimated a zero fee for this sender."
-          : "Confirm the premium fee transaction in your wallet."
+          : "Confirm the Status estimate fallback transaction in your wallet."
       );
 
       const txHash = await writeContractAsync({
@@ -1003,7 +1003,7 @@ export default function AddMemoryModal({
                     <p className="mt-1 text-gray-100">
                       {preparedSave.isGaslessEstimate
                         ? "Gasless estimate returned"
-                        : `Premium fee cap: ${preparedSave.feeCapLabel}`}
+                        : `Paid fallback fee cap: ${preparedSave.feeCapLabel}`}
                     </p>
                     <p className="mt-1 text-xs text-gray-400">
                       Built from linea_estimateGas with your wallet as the sender.
@@ -1012,16 +1012,16 @@ export default function AddMemoryModal({
                   <div className="grid gap-2 sm:grid-cols-2">
                     <button
                       type="button"
-                      onClick={confirmPremiumSave}
+                      onClick={confirmEstimatedSave}
                       className="rounded-lg bg-purple-600 px-4 py-3 text-left text-sm font-medium text-white transition hover:bg-purple-700"
                     >
                       <span className="block">
                         {preparedSave.isGaslessEstimate
                           ? "Continue in wallet"
-                          : "Pay premium fee"}
+                          : "Use paid fallback"}
                       </span>
                       <span className="mt-1 block text-xs font-normal text-purple-100">
-                        Available now with the current wallet flow.
+                        Uses Status estimate values now.
                       </span>
                     </button>
                     <button
@@ -1029,9 +1029,9 @@ export default function AddMemoryModal({
                       disabled
                       className="rounded-lg border border-purple-500/30 bg-slate-800 px-4 py-3 text-left text-sm font-medium text-gray-400"
                     >
-                      <span className="block">Gasless UX</span>
+                      <span className="block">Full gasless submit</span>
                       <span className="mt-1 block text-xs font-normal text-gray-500">
-                        Coming soon.
+                        Waiting on Hoodi RLN fix.
                       </span>
                     </button>
                   </div>
