@@ -32,6 +32,12 @@ type WalletStatusProps = {
 };
 
 const MATJIP_REWARD_AMOUNT = BigInt(3) * BigInt(10) ** BigInt(18);
+const EMPTY_REWARD_PROGRESS: KarmaRewardProgress = {
+  count: 0,
+  target: 5,
+  regionCount: 0,
+  bestRegionSize: 0,
+};
 
 function shortAddress(address: string) {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
@@ -47,7 +53,7 @@ function formatKarmaBalance(balance: string) {
 
 export default function WalletStatus({
   refreshNonce = 0,
-  rewardProgress = { count: 0, target: 5 },
+  rewardProgress = EMPTY_REWARD_PROGRESS,
 }: WalletStatusProps) {
   const { address, isConnected } = useAppKitAccount({ namespace: "eip155" });
   const { chainId, switchNetwork } = useAppKitNetwork();
@@ -260,7 +266,7 @@ export default function WalletStatus({
                     )}
                     <div className="mt-2">
                       <div className="flex items-center justify-between text-[11px] text-emerald-200">
-                        <span>Connected progress</span>
+                        <span>Best connected region</span>
                         <span>
                           {rewardProgress.count}/{rewardProgress.target}
                         </span>
@@ -277,8 +283,14 @@ export default function WalletStatus({
                         />
                       </div>
                       <div className="mt-1 text-[11px] leading-snug text-gray-300">
-                        Earn +3 when 5 nearby memories connect on the map.
+                        Showing the closest region to a reward. Earn +3 when
+                        any 5 nearby unclaimed memories connect.
                       </div>
+                      {rewardProgress.regionCount > 1 && (
+                        <div className="mt-1 text-[11px] leading-snug text-gray-400">
+                          {rewardProgress.regionCount} regions in progress
+                        </div>
+                      )}
                     </div>
                     <div className="mt-1 text-[11px] leading-snug text-gray-400">
                       App-level soulbound reward for this hackathon demo. Demo
