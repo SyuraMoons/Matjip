@@ -1222,7 +1222,12 @@ export default function Map({
       setMemories([]);
       setIsLoadingMemories(false);
       setMemoryLoadError("");
-      publishRewardProgress({ count: 0, target: 5 });
+      publishRewardProgress({
+        count: 0,
+        target: 5,
+        regionCount: 0,
+        bestRegionSize: 0,
+      });
       return;
     }
 

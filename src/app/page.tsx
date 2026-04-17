@@ -72,6 +72,8 @@ export default function Home() {
     useState<KarmaRewardProgress>({
       count: 0,
       target: 5,
+      regionCount: 0,
+      bestRegionSize: 0,
     });
   const { isConnected } = useAppKitAccount({ namespace: "eip155" });
   const { disconnect } = useDisconnect();

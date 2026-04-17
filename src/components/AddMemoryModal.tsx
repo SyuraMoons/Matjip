@@ -37,6 +37,12 @@ type KarmaInfo = {
   source: "official" | "matjip";
 };
 
+type KarmaSummary = {
+  official?: KarmaInfo;
+  matjip?: KarmaInfo;
+  error?: string;
+};
+
 type UploadedMemory = {
   imageCids: string[];
   metadataCid: string;
@@ -530,17 +536,19 @@ export default function AddMemoryModal({
     setSubmitStep("karma");
     try {
       const response = await fetch(`/api/karma/${address}`);
-      const karmaInfo = (await response.json()) as KarmaInfo & { error?: string };
+      const karmaSummary = (await response.json()) as KarmaSummary;
 
       if (!response.ok) {
-        throw new Error(karmaInfo.error || "Unable to check Karma");
+        throw new Error(karmaSummary.error || "Unable to check Karma");
       }
 
-      if (!karmaInfo.gaslessEligible || BigInt(karmaInfo.karmaBalance) <= BigInt(0)) {
+      const realKarma = karmaSummary.official;
+      if (
+        !realKarma?.gaslessEligible ||
+        BigInt(realKarma.karmaBalance) <= BigInt(0)
+      ) {
         setSubmitNotice(
-          karmaInfo.source === "matjip"
-            ? "No Matjip Karma yet. Add connected memories to earn demo Karma."
-            : "No official Status Karma found yet. The wallet can still submit with the current Hoodi paid fallback."
+          "No official Status Karma found yet. The wallet can still submit with the current Hoodi paid fallback."
         );
       }
     } catch (error) {
