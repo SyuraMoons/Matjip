@@ -14,6 +14,67 @@ L.Icon.Default.mergeOptions({
   shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
 });
 
+// ============================================================================
+// Memory Node Types and Helper Functions
+// ============================================================================
+
+type MemoryNode = MemoryData & {
+  baseRadius: number;
+  currentRadius: number;
+};
+
+function getDistanceMeters(
+  map: L.Map,
+  a: { lat: number; lng: number },
+  b: { lat: number; lng: number }
+): number {
+  return map.distance([a.lat, a.lng], [b.lat, b.lng]);
+}
+
+function circlesTouch(
+  map: L.Map,
+  a: MemoryNode,
+  b: MemoryNode
+): boolean {
+  const distance = getDistanceMeters(map, a, b);
+  return distance <= a.currentRadius + b.currentRadius;
+}
+
+function computeConnectedGroups(
+  map: L.Map,
+  nodes: MemoryNode[]
+): MemoryNode[][] {
+  const visited = new Set<number>();
+  const groups: MemoryNode[][] = [];
+
+  for (let i = 0; i < nodes.length; i++) {
+    if (visited.has(nodes[i].id)) continue;
+
+    const stack = [nodes[i]];
+    const group: MemoryNode[] = [];
+    visited.add(nodes[i].id);
+
+    while (stack.length > 0) {
+      const current = stack.pop()!;
+      group.push(current);
+
+      for (let j = 0; j < nodes.length; j++) {
+        const next = nodes[j];
+        if (visited.has(next.id)) continue;
+
+        if (circlesTouch(map, current, next)) {
+          visited.add(next.id);
+          stack.push(next);
+        }
+      }
+    }
+
+    groups.push(group);
+  }
+
+  return groups;
+}
+
 function createMemoryIcon() {
   return L.divIcon({
     className: "",
@@ -307,6 +368,7 @@ export default function Map({
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isLocating, setIsLocating] = useState(true);
   const memoriesRef = useRef<MemoryData[]>([]);
+  const memoryNodesRef = useRef<MemoryNode[]>([]);
 
   // Keep memoriesRef in sync with memories state
   useEffect(() => {
@@ -598,19 +660,23 @@ export default function Map({
     new LocateControl({ position: "bottomright" }).addTo(map);
 
     // --- Visited-area system using clipPath masks ---
-    const VISITED_RADIUS_METERS = 100;
+    const BASE_RADIUS_METERS = 100;
     let updateFrameId: number | null = null;
 
     // Clip the streets pane to circles at the user's location and every
     // memory, so the labelled Voyager tiles are only visible inside
     // each visited radius. Uses an SVG path() so multiple circles can be
     // combined in a single clip-path.
-    function circleSubpath(lat: number, lng: number): string {
+    function circleSubpath(
+      lat: number,
+      lng: number,
+      radiusMeters: number
+    ): string {
       const pt = map.latLngToLayerPoint(L.latLng(lat, lng));
       const metersPerPixel =
         (40075016.686 * Math.abs(Math.cos((lat * Math.PI) / 180))) /
         Math.pow(2, map.getZoom() + 8);
-      const r = VISITED_RADIUS_METERS / metersPerPixel;
+      const r = radiusMeters / metersPerPixel;
       return `M ${pt.x + r} ${pt.y} a ${r} ${r} 0 1 0 ${-2 * r} 0 a ${r} ${r} 0 1 0 ${2 * r} 0 Z`;
     }
 
@@ -619,10 +685,10 @@ export default function Map({
       if (!pane) return;
       const subpaths: string[] = [];
       const loc = userLocationRef.current;
-      if (loc) subpaths.push(circleSubpath(loc.lat, loc.lng));
-      // Use current memories from ref, not hardcoded INITIAL_SAMPLE_MEMORIES
-      memoriesRef.current.forEach((m) =>
-        subpaths.push(circleSubpath(m.lat, m.lng))
+      if (loc) subpaths.push(circleSubpath(loc.lat, loc.lng, BASE_RADIUS_METERS));
+      // Use memory nodes with their current radii
+      memoryNodesRef.current.forEach((node) =>
+        subpaths.push(circleSubpath(node.lat, node.lng, node.currentRadius))
       );
       if (subpaths.length === 0) {
         pane.style.clipPath = "circle(0px at 0px 0px)";
@@ -759,7 +825,7 @@ export default function Map({
     };
   }, []);
 
-  // Update markers when memories change
+  // Update markers and compute connected groups when memories change
   useEffect(() => {
     if (!mapInstanceRef.current) return;
 
@@ -774,6 +840,71 @@ export default function Map({
 
     // Add all current memories as markers
     memories.forEach((memory) => addMemoryMarker(memory, map));
+
+    // Convert memories to nodes with base radius
+    const BASE_RADIUS = 100;
+    const nodes: MemoryNode[] = memories.map((memory) => ({
+      ...memory,
+      baseRadius: BASE_RADIUS,
+      currentRadius: BASE_RADIUS,
+    }));
+
+    // Compute connected groups using base radius
+    const groups = computeConnectedGroups(map, nodes);
+
+    // Apply grown radius to each node based on group size
+    for (const group of groups) {
+      const grownRadius = BASE_RADIUS * Math.sqrt(group.length);
+      for (const node of group) {
+        node.currentRadius = grownRadius;
+      }
+    }
+
+    // Update the ref for use in rendering
+    memoryNodesRef.current = nodes;
+
+    // Trigger a mask update with new radii (the updateStreetsMask function
+    // will read from memoryNodesRef.current which we just updated)
+    requestAnimationFrame(() => {
+      // Manually build and apply the updated mask since updateStreetsMask
+      // is defined in the map setup closure
+      const pane = streetsPaneRef.current;
+      if (!pane) return;
+
+      const subpaths: string[] = [];
+      const loc = userLocationRef.current;
+
+      if (loc && mapInstanceRef.current) {
+        const mapInst = mapInstanceRef.current;
+        const pt = mapInst.latLngToLayerPoint(L.latLng(loc.lat, loc.lng));
+        const metersPerPixel =
+          (40075016.686 * Math.abs(Math.cos((loc.lat * Math.PI) / 180))) /
+          Math.pow(2, mapInst.getZoom() + 8);
+        const r = 100 / metersPerPixel;
+        subpaths.push(
+          `M ${pt.x + r} ${pt.y} a ${r} ${r} 0 1 0 ${-2 * r} 0 a ${r} ${r} 0 1 0 ${2 * r} 0 Z`
+        );
+      }
+
+      memoryNodesRef.current.forEach((node) => {
+        if (!mapInstanceRef.current) return;
+        const mapInst = mapInstanceRef.current;
+        const pt = mapInst.latLngToLayerPoint(L.latLng(node.lat, node.lng));
+        const metersPerPixel =
+          (40075016.686 * Math.abs(Math.cos((node.lat * Math.PI) / 180))) /
+          Math.pow(2, mapInst.getZoom() + 8);
+        const r = node.currentRadius / metersPerPixel;
+        subpaths.push(
+          `M ${pt.x + r} ${pt.y} a ${r} ${r} 0 1 0 ${-2 * r} 0 a ${r} ${r} 0 1 0 ${2 * r} 0 Z`
+        );
+      });
+
+      if (subpaths.length === 0) {
+        pane.style.clipPath = "circle(0px at 0px 0px)";
+      } else {
+        pane.style.clipPath = `path('${subpaths.join(" ")}')`;
+      }
+    });
   }, [memories]);
 
   const handleSaveMemory = (memory: MemoryData) => {
