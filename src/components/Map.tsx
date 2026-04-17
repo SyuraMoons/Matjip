@@ -86,6 +86,72 @@ function buildConnectedGroups(
   return Array.from(groups.values());
 }
 
+// Haversine distance: calculate geodetic distance between two lat/lng points
+function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000; // Earth radius in meters
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+  const Δλ = ((lng2 - lng1) * Math.PI) / 180;
+
+  const a =
+    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+}
+
+// Compute group span: maximum distance between any two pins in the group
+function computeGroupSpan(group: MemoryData[]): number {
+  if (group.length < 2) return 0;
+
+  let maxSpan = 0;
+  for (let i = 0; i < group.length; i++) {
+    for (let j = i + 1; j < group.length; j++) {
+      const dist = haversineDistance(group[i].lat, group[i].lng, group[j].lat, group[j].lng);
+      maxSpan = Math.max(maxSpan, dist);
+    }
+  }
+
+  return maxSpan;
+}
+
+// Zone level definition
+type ZoneLevel = {
+  level: number;
+  multiplier: number;
+};
+
+// Compute zone level based on group size and span
+function computeZoneLevel(group: MemoryData[]): ZoneLevel {
+  const size = group.length;
+  const span = computeGroupSpan(group);
+
+  console.log(
+    `[Zone] Computing level: size=${size}, span=${span.toFixed(0)}m`,
+    group.map((m) => ({ id: m.id, title: m.title }))
+  );
+
+  // Level 3: ≥7 pins AND span ≥1000m
+  if (size >= 7 && span >= 1000) {
+    return { level: 3, multiplier: 2.0 };
+  }
+
+  // Level 2: ≥5 pins AND span ≥700m
+  if (size >= 5 && span >= 700) {
+    return { level: 2, multiplier: 1.5 };
+  }
+
+  // Level 1: ≥3 pins AND span ≥400m
+  if (size >= 3 && span >= 400) {
+    return { level: 1, multiplier: 1.3 };
+  }
+
+  // No level: multiplier = 1 (no bonus)
+  return { level: 0, multiplier: 1.0 };
+}
+
 // Compute enclosing aura that covers all pins in a connected group
 function computeEnclosingGroupAura(
   map: L.Map,
@@ -772,47 +838,55 @@ export default function Map({
 
       const { center, radiusMeters, karma } = computeEnclosingGroupAura(map, group, 120);
 
+      // Compute zone level and multiplier
+      const { level, multiplier } = computeZoneLevel(uniqueGroup);
+
       // Create aura circle - NOT part of clipPath, just a visual overlay
       // Guaranteed to enclose all pins in the group (using Leaflet bounds)
       const aura = L.circle(center, {
         radius: radiusMeters,
-        color: "rgba(139, 92, 246, 0.25)",
+        color: "rgba(139, 92, 246, 0.6)",
         fill: true,
-        fillColor: "rgba(139, 92, 246, 0.08)",
-        fillOpacity: 0.08,
-        weight: 1.5,
-        opacity: 0.25,
+        fillColor: "rgba(139, 92, 246, 0.18)",
+        fillOpacity: 0.18,
+        weight: 3,
+        opacity: 0.6,
         interactive: false,
         pane: "overlayPane",
       }).addTo(map);
 
       karmaAuraLayersRef.current.push(aura);
 
-      // Create karma badge showing exact group karma count (= unique members)
+      // Create karma badge showing group karma count and multiplier
+      const multiplierText = level > 0 ? `${multiplier.toFixed(1)}x` : "—";
+      const levelText = level > 0 ? `L${level}` : "—";
       const badgeIcon = L.divIcon({
         className: "",
         html: `
           <div style="
             display: flex;
+            flex-direction: column;
             align-items: center;
             justify-content: center;
-            width: 40px;
-            height: 40px;
+            width: 72px;
+            height: 72px;
             border-radius: 50%;
             background: rgba(139, 92, 246, 0.15);
-            border: 1.5px solid rgba(139, 92, 246, 0.4);
-            font-size: 12px;
+            border: 2px solid rgba(139, 92, 246, 0.5);
+            font-family: monospace;
             font-weight: 700;
-            color: rgba(139, 92, 246, 0.9);
-            box-shadow: 0 0 12px rgba(139, 92, 246, 0.2);
+            color: rgba(139, 92, 246, 0.95);
+            box-shadow: 0 0 16px rgba(139, 92, 246, 0.25), inset 0 0 8px rgba(139, 92, 246, 0.1);
             text-align: center;
-            line-height: 1;
+            gap: 3px;
           ">
-            ${karma}
+            <div style="font-size: 20px; font-weight: 800;">${karma}</div>
+            <div style="font-size: 9px; letter-spacing: 0.08em; color: rgba(139, 92, 246, 0.75);">${levelText}</div>
+            <div style="font-size: 10px; font-weight: 700; color: rgba(139, 92, 246, 0.9);">${multiplierText}</div>
           </div>
         `,
-        iconSize: [40, 40],
-        iconAnchor: [20, 20],
+        iconSize: [72, 72],
+        iconAnchor: [36, 36],
       });
 
       const badge = L.marker(center, {
@@ -823,7 +897,7 @@ export default function Map({
       karmaBadgesRef.current.push(badge);
 
       console.log(
-        `[Karma] Group aura: karma=${karma} (${uniqueGroup.length} unique members), center=[${center[0].toFixed(4)}, ${center[1].toFixed(4)}], radius=${radiusMeters.toFixed(0)}m`,
+        `[Karma] Group aura: karma=${karma}, zone-level=${level} (multiplier=${multiplier.toFixed(1)}x), ${uniqueGroup.length} unique members, center=[${center[0].toFixed(4)}, ${center[1].toFixed(4)}], radius=${radiusMeters.toFixed(0)}m`,
         { members: uniqueGroup.map((m) => ({ id: m.id, title: m.title })) }
       );
     }
@@ -1466,6 +1540,40 @@ export default function Map({
   }, [memories]);
 
   const handleSaveMemory = async (memory: MemoryData) => {
+    // Add memory to list and compute zone level/multiplier
+    const updatedMemories = upsertMemory(memoriesRef.current, memory);
+
+    // Rebuild groups with the new memory included
+    if (mapInstanceRef.current) {
+      const map = mapInstanceRef.current;
+      const pairs = buildChronologicalPairs(map, updatedMemories, 1500);
+      const groups = buildConnectedGroups(updatedMemories, pairs);
+
+      // Find the group containing the new memory
+      let newMemoryGroup: MemoryData[] | null = null;
+      for (const group of groups) {
+        if (group.find((m) => m.id === memory.id)) {
+          newMemoryGroup = group;
+          break;
+        }
+      }
+
+      // Compute zone level and apply multiplier
+      if (newMemoryGroup) {
+        const { level, multiplier } = computeZoneLevel(newMemoryGroup);
+
+        // Apply multiplier to this new pin only (baseReward = 1)
+        const baseReward = 1;
+        memory.reward = baseReward * multiplier;
+        memory.multiplier = multiplier;
+        memory.zoneLevel = level;
+
+        console.log(
+          `[Reward] New memory ${memory.id}: level=${level}, multiplier=${multiplier}, reward=${memory.reward.toFixed(2)}`
+        );
+      }
+    }
+
     setMemories((prev) => upsertMemory(prev, memory));
     mapInstanceRef.current?.flyTo([memory.lat, memory.lng], 15, {
       animate: true,
