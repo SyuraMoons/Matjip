@@ -90,16 +90,17 @@ export async function loadDecentralizedMemories(options?: {
     .sort((a, b) => a.createdAt - b.createdAt);
 }
 
-export async function loadKarmaProgressMemories(): Promise<
-  KarmaProgressMemory[]
-> {
+export async function loadKarmaProgressMemories(options?: {
+  poster?: Address;
+}): Promise<KarmaProgressMemory[]> {
   const memoryCount = await readContract(wagmiConfig, {
     ...memoryRegistryContract,
     functionName: "memoryCount",
   });
+  const normalizedPoster = options?.poster?.toLowerCase();
   const ids = Array.from({ length: Number(memoryCount) }, (_, index) => index);
 
-  return Promise.all(
+  const results = await Promise.all(
     ids.map(async (id) => {
       const [chainMemory, rewardClaimed] = await Promise.all([
         readContract(wagmiConfig, {
@@ -114,6 +115,13 @@ export async function loadKarmaProgressMemories(): Promise<
         }) as Promise<boolean>,
       ]);
 
+      if (
+        normalizedPoster &&
+        chainMemory.poster.toLowerCase() !== normalizedPoster
+      ) {
+        return null;
+      }
+
       return {
         id,
         lat: Number(chainMemory.latE6) / 1_000_000,
@@ -121,6 +129,10 @@ export async function loadKarmaProgressMemories(): Promise<
         rewardClaimed,
       };
     })
+  );
+
+  return results.filter(
+    (memory): memory is KarmaProgressMemory => memory !== null
   );
 }
 
@@ -131,7 +143,6 @@ export function decentralizedMemoryToMapMemory(memory: DecentralizedMemory) {
 
   return {
     id: memory.id,
-    createdAt: memory.createdAt,
     title: memory.metadata.title,
     caption: memory.metadata.description,
     date: createdDate.toLocaleDateString("en-US", {

@@ -29,174 +29,6 @@ L.Icon.Default.mergeOptions({
 
 type RouteCache = Record<string, [number, number][]>;
 
-// Union-Find data structure for connected component detection
-class UnionFind {
-  parent: globalThis.Map<number, number>;
-
-  constructor(ids: number[]) {
-    this.parent = new globalThis.Map();
-    ids.forEach((id) => this.parent.set(id, id));
-  }
-
-  find(x: number): number {
-    if (!this.parent.has(x)) return x;
-    const parent = this.parent.get(x)!;
-    if (parent !== x) {
-      this.parent.set(x, this.find(parent));
-    }
-    return this.parent.get(x)!;
-  }
-
-  union(x: number, y: number) {
-    const px = this.find(x);
-    const py = this.find(y);
-    if (px !== py) {
-      this.parent.set(px, py);
-    }
-  }
-}
-
-// Build connected groups from route pairs
-function buildConnectedGroups(
-  memories: MemoryData[],
-  pairs: Array<[MemoryData, MemoryData]>
-): MemoryData[][] {
-  // Deduplicate input memories by id first to prevent duplicate counting
-  const uniqueMemoriesMap = new globalThis.Map<number, MemoryData>();
-  for (const memory of memories) {
-    uniqueMemoriesMap.set(memory.id, memory);
-  }
-  const uniqueMemories = Array.from(uniqueMemoriesMap.values());
-
-  const uf = new UnionFind(uniqueMemories.map((m) => m.id));
-
-  for (const [a, b] of pairs) {
-    uf.union(a.id, b.id);
-  }
-
-  const groups = new globalThis.Map<number, MemoryData[]>();
-  for (const memory of uniqueMemories) {
-    const root = uf.find(memory.id);
-    if (!groups.has(root)) {
-      groups.set(root, []);
-    }
-    groups.get(root)!.push(memory);
-  }
-
-  return Array.from(groups.values());
-}
-
-// Haversine distance: calculate geodetic distance between two lat/lng points
-function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
-  const R = 6371000; // Earth radius in meters
-  const φ1 = (lat1 * Math.PI) / 180;
-  const φ2 = (lat2 * Math.PI) / 180;
-  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
-  const Δλ = ((lng2 - lng1) * Math.PI) / 180;
-
-  const a =
-    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
-    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-
-  return R * c;
-}
-
-// Compute group span: maximum distance between any two pins in the group
-function computeGroupSpan(group: MemoryData[]): number {
-  if (group.length < 2) return 0;
-
-  let maxSpan = 0;
-  for (let i = 0; i < group.length; i++) {
-    for (let j = i + 1; j < group.length; j++) {
-      const dist = haversineDistance(group[i].lat, group[i].lng, group[j].lat, group[j].lng);
-      maxSpan = Math.max(maxSpan, dist);
-    }
-  }
-
-  return maxSpan;
-}
-
-// Zone level definition
-type ZoneLevel = {
-  level: number;
-  multiplier: number;
-};
-
-// Compute zone level based on group size and span
-function computeZoneLevel(group: MemoryData[]): ZoneLevel {
-  const size = group.length;
-  const span = computeGroupSpan(group);
-
-  console.log(
-    `[Zone] Computing level: size=${size}, span=${span.toFixed(0)}m`,
-    group.map((m) => ({ id: m.id, title: m.title }))
-  );
-
-  // Level 3: ≥7 pins AND span ≥1000m
-  if (size >= 7 && span >= 1000) {
-    return { level: 3, multiplier: 2.0 };
-  }
-
-  // Level 2: ≥5 pins AND span ≥700m
-  if (size >= 5 && span >= 700) {
-    return { level: 2, multiplier: 1.5 };
-  }
-
-  // Level 1: ≥3 pins AND span ≥400m
-  if (size >= 3 && span >= 400) {
-    return { level: 1, multiplier: 1.3 };
-  }
-
-  // No level: multiplier = 1 (no bonus)
-  return { level: 0, multiplier: 1.0 };
-}
-
-// Compute enclosing aura that covers all pins in a connected group
-function computeEnclosingGroupAura(
-  map: L.Map,
-  group: MemoryData[],
-  paddingMeters = 120
-): { center: [number, number]; radiusMeters: number; karma: number } {
-  if (group.length === 0) {
-    return { center: [0, 0], radiusMeters: 0, karma: 0 };
-  }
-
-  // Deduplicate group by id to get unique memories only
-  const uniqueMemoriesMap = new globalThis.Map<number, MemoryData>();
-  for (const memory of group) {
-    uniqueMemoriesMap.set(memory.id, memory);
-  }
-  const uniqueGroup = Array.from(uniqueMemoriesMap.values());
-
-  if (uniqueGroup.length === 0) {
-    return { center: [0, 0], radiusMeters: 0, karma: 0 };
-  }
-
-  // Compute bounds using Leaflet's latLngBounds for accurate enclosing geometry
-  const bounds = L.latLngBounds(
-    uniqueGroup.map((m) => [m.lat, m.lng] as [number, number])
-  );
-
-  // Get center from bounds (more robust than manual calculation)
-  const boundsCenter = bounds.getCenter();
-  const center: [number, number] = [boundsCenter.lat, boundsCenter.lng];
-
-  // Compute radius as max distance from center to any member + padding
-  // This guarantees all members are inside the circle
-  let maxDistanceMeters = 0;
-  for (const memory of uniqueGroup) {
-    const dist = map.distance(center, [memory.lat, memory.lng]);
-    maxDistanceMeters = Math.max(maxDistanceMeters, dist);
-  }
-
-  return {
-    center,
-    radiusMeters: maxDistanceMeters + paddingMeters,
-    karma: uniqueGroup.length,
-  };
-}
-
 function getPlaceScaleRadius(memory: MemoryData): number {
   const text = `${memory.title} ${memory.location} ${memory.caption}`.toLowerCase();
 
@@ -431,8 +263,8 @@ function createMemoryIcon() {
   return L.divIcon({
     className: "",
     html: `
-      <svg width="40" height="50" viewBox="0 0 40 50" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 2px 4px rgba(139, 92, 246, 0.4)) drop-shadow(0 0 8px rgba(139, 92, 246, 0.3));">
-        <path d="M 20 2 C 28.8 2 36 9.2 36 18 C 36 28 20 48 20 48 C 20 48 4 28 4 18 C 4 9.2 11.2 2 20 2 Z" fill="rgba(139, 92, 246, 0.95)" stroke="rgba(249, 250, 251, 0.9)" stroke-width="1.5"/>
+      <svg width="40" height="50" viewBox="0 0 40 50" xmlns="http://www.w3.org/2000/svg" style="filter: drop-shadow(0 2px 4px rgba(232, 135, 136, 0.4)) drop-shadow(0 0 8px rgba(232, 135, 136, 0.3));">
+        <path d="M 20 2 C 28.8 2 36 9.2 36 18 C 36 28 20 48 20 48 C 20 48 4 28 4 18 C 4 9.2 11.2 2 20 2 Z" fill="rgba(232, 135, 136, 0.95)" stroke="rgba(249, 250, 251, 0.9)" stroke-width="1.5"/>
         <circle cx="20" cy="18" r="6" fill="rgba(249, 250, 251, 0.95)"/>
       </svg>
     `,
@@ -471,7 +303,7 @@ function createMemoryPopupContent(
           height: 70px;
           object-fit: cover;
           border-radius: 6px;
-          border: 1px solid rgba(139, 92, 246, 0.3);
+          border: 1px solid rgba(232, 135, 136, 0.3);
         " />
       `
         )
@@ -483,11 +315,11 @@ function createMemoryPopupContent(
   return `
     <div style="
       background: rgba(17, 24, 39, 0.97);
-      border: 1px solid rgba(139, 92, 246, 0.4);
+      border: 1px solid rgba(232, 135, 136, 0.4);
       border-radius: 12px;
       padding: 12px 14px;
       font-family: inherit;
-      box-shadow: 0 0 20px rgba(139, 92, 246, 0.15);
+      box-shadow: 0 0 20px rgba(232, 135, 136, 0.15);
       display: flex;
       gap: 10px;
       width: 300px;
@@ -498,7 +330,7 @@ function createMemoryPopupContent(
         <div>
           <div style="font-size: 20px; line-height: 1; margin-bottom: 5px;">${memory.emoji}</div>
           <div style="font-size: 13px; font-weight: 700; color: #f9fafb; margin-bottom: 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;" title="${titleText}">${truncatedTitle}</div>
-          <div style="font-size: 10px; color: rgba(139, 92, 246, 0.85); margin-bottom: 6px; letter-spacing: 0.04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+          <div style="font-size: 10px; color: rgba(232, 135, 136, 0.85); margin-bottom: 6px; letter-spacing: 0.04em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
             📍 ${memory.location.substring(0, 20)}${memory.location.length > 20 ? "..." : ""} · ${memory.date}
           </div>
         </div>
@@ -509,16 +341,16 @@ function createMemoryPopupContent(
     </div>
     <div style="margin-top: 10px;">
       <button class="read-more-btn" data-memory-id="${memory.id}" style="
-        background: rgba(139, 92, 246, 0.3);
-        border: 1px solid rgba(139, 92, 246, 0.5);
-        color: rgba(139, 92, 246, 1);
+        background: rgba(232, 135, 136, 0.3);
+        border: 1px solid rgba(232, 135, 136, 0.5);
+        color: rgba(232, 135, 136, 1);
         padding: 6px 12px;
         border-radius: 6px;
         font-size: 12px;
         font-weight: 600;
         cursor: pointer;
         transition: all 0.2s;
-      " onmouseover="this.style.background = 'rgba(139, 92, 246, 0.5)'" onmouseout="this.style.background = 'rgba(139, 92, 246, 0.3)'">
+      " onmouseover="this.style.background = 'rgba(232, 135, 136, 0.5)'" onmouseout="this.style.background = 'rgba(232, 135, 136, 0.3)'">
         Read more →
       </button>
     </div>
@@ -556,9 +388,9 @@ function MemoryDetailModal({
       <div
         style={{
           backgroundColor: "rgba(17, 24, 39, 0.98)",
-          border: "1px solid rgba(139, 92, 246, 0.4)",
+          border: "1px solid rgba(232, 135, 136, 0.4)",
           borderRadius: "16px",
-          boxShadow: "0 0 40px rgba(139, 92, 246, 0.2)",
+          boxShadow: "0 0 40px rgba(232, 135, 136, 0.2)",
           fontFamily: "inherit",
           display: "flex",
           width: "750px",
@@ -575,8 +407,8 @@ function MemoryDetailModal({
             position: "absolute",
             top: "16px",
             right: "16px",
-            background: "rgba(139, 92, 246, 0.2)",
-            border: "1px solid rgba(139, 92, 246, 0.4)",
+            background: "rgba(232, 135, 136, 0.2)",
+            border: "1px solid rgba(232, 135, 136, 0.4)",
             borderRadius: "50%",
             width: "32px",
             height: "32px",
@@ -590,10 +422,10 @@ function MemoryDetailModal({
             zIndex: 10,
           }}
           onMouseOver={(e) => {
-            e.currentTarget.style.backgroundColor = "rgba(139, 92, 246, 0.4)";
+            e.currentTarget.style.backgroundColor = "rgba(232, 135, 136, 0.4)";
           }}
           onMouseOut={(e) => {
-            e.currentTarget.style.backgroundColor = "rgba(139, 92, 246, 0.2)";
+            e.currentTarget.style.backgroundColor = "rgba(232, 135, 136, 0.2)";
           }}
         >
           ✕
@@ -609,7 +441,7 @@ function MemoryDetailModal({
             flexDirection: "column",
             gap: "12px",
             overflowY: "auto",
-            borderRight: "1px solid rgba(139, 92, 246, 0.2)",
+            borderRight: "1px solid rgba(232, 135, 136, 0.2)",
           }}
         >
           {memory.photos && memory.photos.length > 0 ? (
@@ -622,7 +454,7 @@ function MemoryDetailModal({
                   height: "140px",
                   objectFit: "cover",
                   borderRadius: "10px",
-                  border: "1px solid rgba(139, 92, 246, 0.3)",
+                  border: "1px solid rgba(232, 135, 136, 0.3)",
                 }}
               />
             ))
@@ -671,7 +503,7 @@ function MemoryDetailModal({
             <div
               style={{
                 fontSize: "12px",
-                color: "rgba(139, 92, 246, 0.85)",
+                color: "rgba(232, 135, 136, 0.85)",
                 letterSpacing: "0.04em",
               }}
             >
@@ -684,10 +516,10 @@ function MemoryDetailModal({
             style={{
               flex: 1,
               overflowY: "auto",
-              backgroundColor: "rgba(139, 92, 246, 0.05)",
+              backgroundColor: "rgba(232, 135, 136, 0.05)",
               padding: "14px",
               borderRadius: "10px",
-              border: "1px solid rgba(139, 92, 246, 0.2)",
+              border: "1px solid rgba(232, 135, 136, 0.2)",
               fontSize: "14px",
               color: "#d1d5db",
               lineHeight: "1.8",
@@ -721,8 +553,6 @@ export default function Map({
   const updateStreetsMaskRef = useRef<(() => void) | null>(null);
   const routePointsRef = useRef<RouteCache>({});
   const routeFetchNonceRef = useRef(0);
-  const karmaAuraLayersRef = useRef<L.Circle[]>([]);
-  const karmaBadgesRef = useRef<L.Marker[]>([]);
   const { address, isConnected } = useAppKitAccount({ namespace: "eip155" });
 
   const [memories, setMemories] = useState<MemoryData[]>([]);
@@ -805,103 +635,6 @@ export default function Map({
     document.addEventListener("click", handleReadMoreClick);
     return () => document.removeEventListener("click", handleReadMoreClick);
   }, []);
-
-  // Render karma group auras (transparent circles showing connected groups and their karma count)
-  const renderKarmaAuras = (
-    map: L.Map,
-    memories: MemoryData[],
-    pairs: Array<[MemoryData, MemoryData]>
-  ) => {
-    // Clear old auras and badges
-    karmaAuraLayersRef.current.forEach((circle) => map.removeLayer(circle));
-    karmaAuraLayersRef.current = [];
-
-    karmaBadgesRef.current.forEach((badge) => map.removeLayer(badge));
-    karmaBadgesRef.current = [];
-
-    if (memories.length === 0) return;
-
-    // Build connected groups
-    const groups = buildConnectedGroups(memories, pairs);
-
-    // Render auras only for groups with 2+ unique pins
-    for (const group of groups) {
-      // Deduplicate to get unique count
-      const uniqueMemoriesMap = new globalThis.Map<number, MemoryData>();
-      for (const memory of group) {
-        uniqueMemoriesMap.set(memory.id, memory);
-      }
-      const uniqueGroup = Array.from(uniqueMemoriesMap.values());
-
-      // Only render if 2+ unique members
-      if (uniqueGroup.length < 2) continue;
-
-      const { center, radiusMeters, karma } = computeEnclosingGroupAura(map, group, 120);
-
-      // Compute zone level and multiplier
-      const { level, multiplier } = computeZoneLevel(uniqueGroup);
-
-      // Create aura circle - NOT part of clipPath, just a visual overlay
-      // Guaranteed to enclose all pins in the group (using Leaflet bounds)
-      const aura = L.circle(center, {
-        radius: radiusMeters,
-        color: "rgba(139, 92, 246, 0.6)",
-        fill: true,
-        fillColor: "rgba(139, 92, 246, 0.18)",
-        fillOpacity: 0.18,
-        weight: 3,
-        opacity: 0.6,
-        interactive: false,
-        pane: "overlayPane",
-      }).addTo(map);
-
-      karmaAuraLayersRef.current.push(aura);
-
-      // Create karma badge showing group karma count and multiplier
-      const multiplierText = level > 0 ? `${multiplier.toFixed(1)}x` : "—";
-      const levelText = level > 0 ? `L${level}` : "—";
-      const badgeIcon = L.divIcon({
-        className: "",
-        html: `
-          <div style="
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            width: 72px;
-            height: 72px;
-            border-radius: 50%;
-            background: rgba(139, 92, 246, 0.15);
-            border: 2px solid rgba(139, 92, 246, 0.5);
-            font-family: monospace;
-            font-weight: 700;
-            color: rgba(139, 92, 246, 0.95);
-            box-shadow: 0 0 16px rgba(139, 92, 246, 0.25), inset 0 0 8px rgba(139, 92, 246, 0.1);
-            text-align: center;
-            gap: 3px;
-          ">
-            <div style="font-size: 20px; font-weight: 800;">${karma}</div>
-            <div style="font-size: 9px; letter-spacing: 0.08em; color: rgba(139, 92, 246, 0.75);">${levelText}</div>
-            <div style="font-size: 10px; font-weight: 700; color: rgba(139, 92, 246, 0.9);">${multiplierText}</div>
-          </div>
-        `,
-        iconSize: [72, 72],
-        iconAnchor: [36, 36],
-      });
-
-      const badge = L.marker(center, {
-        icon: badgeIcon,
-        interactive: false,
-      }).addTo(map);
-
-      karmaBadgesRef.current.push(badge);
-
-      console.log(
-        `[Karma] Group aura: karma=${karma}, zone-level=${level} (multiplier=${multiplier.toFixed(1)}x), ${uniqueGroup.length} unique members, center=[${center[0].toFixed(4)}, ${center[1].toFixed(4)}], radius=${radiusMeters.toFixed(0)}m`,
-        { members: uniqueGroup.map((m) => ({ id: m.id, title: m.title })) }
-      );
-    }
-  };
 
   useEffect(() => {
     if (!mapRef.current || mapInstanceRef.current) return;
@@ -1271,15 +1004,15 @@ export default function Map({
               <div style="position: relative; width: 16px; height: 16px;">
                 <div style="
                   position: absolute; inset: 0;
-                  background: #818cf8;
+                  background: #4285F4;
                   border-radius: 50%;
                   border: 2px solid #fff;
-                  box-shadow: 0 0 0 4px rgba(129,140,248,0.25);
+                  box-shadow: 0 0 0 4px rgba(66,133,244,0.25);
                 "></div>
                 <div style="
                   position: absolute; inset: -8px;
                   border-radius: 50%;
-                  background: rgba(129,140,248,0.12);
+                  background: rgba(66,133,244,0.12);
                   animation: pulse 2s ease-out infinite;
                 "></div>
               </div>
@@ -1295,7 +1028,7 @@ export default function Map({
             .bindPopup(
               `<div style="
                 background: rgba(17,24,39,0.97);
-                border: 1px solid rgba(129,140,248,0.4);
+                border: 1px solid rgba(232,135,136,0.4);
                 border-radius: 10px;
                 padding: 10px 14px;
                 font-family: inherit;
@@ -1323,22 +1056,6 @@ export default function Map({
       mapContainer.removeEventListener("wheel", onWheel);
       cancelAnimationFrame(swzRafId);
       if (swzTimeoutId !== null) clearTimeout(swzTimeoutId);
-
-      // Clean up karma aura layers
-      karmaAuraLayersRef.current.forEach((circle) => {
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.removeLayer(circle);
-        }
-      });
-      karmaAuraLayersRef.current = [];
-
-      karmaBadgesRef.current.forEach((badge) => {
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.removeLayer(badge);
-        }
-      });
-      karmaBadgesRef.current = [];
-
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
@@ -1348,9 +1065,10 @@ export default function Map({
   }, []);
 
   const reloadRewardProgress = useCallback(async () => {
-    const progressMemories = await loadKarmaProgressMemories();
+    if (!address) return;
+    const progressMemories = await loadKarmaProgressMemories({ poster: address as Address });
     publishRewardProgress(calculateKarmaRewardProgress(progressMemories));
-  }, [publishRewardProgress]);
+  }, [address, publishRewardProgress]);
 
   const reloadMemories = async (poster: Address, preserveMemory?: MemoryData) => {
     setIsLoadingMemories(true);
@@ -1381,12 +1099,7 @@ export default function Map({
       setMemories([]);
       setIsLoadingMemories(false);
       setMemoryLoadError("");
-      publishRewardProgress({
-        count: 0,
-        target: 5,
-        regionCount: 0,
-        bestRegionSize: 0,
-      });
+      publishRewardProgress({ count: 0, target: 5 });
       return;
     }
 
@@ -1401,7 +1114,7 @@ export default function Map({
           loadDecentralizedMemories({
             poster: address as Address,
           }),
-          loadKarmaProgressMemories(),
+          loadKarmaProgressMemories({ poster: address as Address }),
         ]);
 
         if (!isCurrent) return;
@@ -1434,18 +1147,19 @@ export default function Map({
     let cancelled = false;
     const nonce = ++routeFetchNonceRef.current;
 
+    // Clear old polylines before drawing new routes
+    map.eachLayer((layer) => {
+      if (layer instanceof L.Polyline) {
+        map.removeLayer(layer);
+      }
+    });
+
     async function loadRoutes() {
       const pairs = buildChronologicalPairs(map, memories, 1500);
       console.log(`[Routes] Found ${pairs.length} chronological-nearest pairs within 1500m`, pairs);
       const nextCache: RouteCache = {};
 
       for (const [a, b] of pairs) {
-        // Skip pairs where start and end points are identical
-        if (a.lat === b.lat && a.lng === b.lng) {
-          console.log(`[Routes] Skipping identical point pair: ${a.id}`);
-          continue;
-        }
-
         const key = getRouteKey(a, b);
         const existing = routePointsRef.current[key];
 
@@ -1524,61 +1238,19 @@ export default function Map({
     const map = mapInstanceRef.current;
 
     // Remove all existing markers except the user location marker
+    // (polylines are managed by the route effect)
     map.eachLayer((layer) => {
       if (layer instanceof L.Marker && layer !== userMarkerRef.current) {
-        map.removeLayer(layer);
-      }
-
-      if (layer instanceof L.Polyline) {
         map.removeLayer(layer);
       }
     });
 
     // Add all current memories as markers
     memories.forEach((memory) => addMemoryMarker(memory, map));
-
-    // Render karma auras for connected groups
-    const pairs = buildChronologicalPairs(map, memories, 1500);
-    renderKarmaAuras(map, memories, pairs);
-
     updateStreetsMaskRef.current?.();
   }, [memories]);
 
   const handleSaveMemory = async (memory: MemoryData) => {
-    // Add memory to list and compute zone level/multiplier
-    const updatedMemories = upsertMemory(memoriesRef.current, memory);
-
-    // Rebuild groups with the new memory included
-    if (mapInstanceRef.current) {
-      const map = mapInstanceRef.current;
-      const pairs = buildChronologicalPairs(map, updatedMemories, 1500);
-      const groups = buildConnectedGroups(updatedMemories, pairs);
-
-      // Find the group containing the new memory
-      let newMemoryGroup: MemoryData[] | null = null;
-      for (const group of groups) {
-        if (group.find((m) => m.id === memory.id)) {
-          newMemoryGroup = group;
-          break;
-        }
-      }
-
-      // Compute zone level and apply multiplier
-      if (newMemoryGroup) {
-        const { level, multiplier } = computeZoneLevel(newMemoryGroup);
-
-        // Apply multiplier to this new pin only (baseReward = 1)
-        const baseReward = 1;
-        memory.reward = baseReward * multiplier;
-        memory.multiplier = multiplier;
-        memory.zoneLevel = level;
-
-        console.log(
-          `[Reward] New memory ${memory.id}: level=${level}, multiplier=${multiplier}, reward=${memory.reward.toFixed(2)}`
-        );
-      }
-    }
-
     setMemories((prev) => upsertMemory(prev, memory));
     mapInstanceRef.current?.flyTo([memory.lat, memory.lng], 15, {
       animate: true,
@@ -1605,34 +1277,32 @@ export default function Map({
         style={{ width: "100%", height: "100%", minHeight: "100vh" }}
       />
 
-      {/* Locating overlay — shown while geolocation resolves */}
-      <div
-        className="locating-overlay"
-        style={{
-          position: "absolute",
-          inset: 0,
-          zIndex: 1000,
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          opacity: showLoadingOverlay ? 1 : 0,
-          pointerEvents: "none",
-        }}
-      >
+      {/* Loading overlay — opaque parchment background with wavy LOADING text */}
+      {showLoadingOverlay && (
         <div
           style={{
-            fontFamily: "'Architects Daughter', 'Marker Felt', cursive",
-            fontSize: "20px",
-            fontWeight: 400,
-            letterSpacing: "0.25em",
-            color: "#2a1a0a",
-            textTransform: "uppercase",
+            position: "absolute",
+            inset: 0,
+            zIndex: 1000,
             display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            backgroundColor: "#efe3c3",
+            pointerEvents: "none",
           }}
         >
-          {(isLoadingMemories ? "SYNCING" : "LOADING")
-            .split("")
-            .map((ch, i) => (
+          <div
+            style={{
+              fontFamily: "'Architects Daughter', 'Marker Felt', cursive",
+              fontSize: "20px",
+              fontWeight: 400,
+              letterSpacing: "0.25em",
+              color: "#2a1a0a",
+              textTransform: "uppercase",
+              display: "flex",
+            }}
+          >
+            {"LOADING".split("").map((ch, i) => (
               <span
                 key={i}
                 style={{
@@ -1643,8 +1313,9 @@ export default function Map({
                 {ch}
               </span>
             ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {memoryLoadError ? (
         <div

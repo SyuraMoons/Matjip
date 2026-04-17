@@ -16,28 +16,12 @@ type KarmaInfo = {
   source: "official" | "matjip";
 };
 
-type KarmaSummary = {
-  address: string;
-  official?: KarmaInfo;
-  matjip?: KarmaInfo;
-  errors?: {
-    official?: string;
-    matjip?: string;
-  };
-};
-
 type WalletStatusProps = {
   refreshNonce?: number;
   rewardProgress?: KarmaRewardProgress;
 };
 
 const MATJIP_REWARD_AMOUNT = BigInt(3) * BigInt(10) ** BigInt(18);
-const EMPTY_REWARD_PROGRESS: KarmaRewardProgress = {
-  count: 0,
-  target: 5,
-  regionCount: 0,
-  bestRegionSize: 0,
-};
 
 function shortAddress(address: string) {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
@@ -53,11 +37,11 @@ function formatKarmaBalance(balance: string) {
 
 export default function WalletStatus({
   refreshNonce = 0,
-  rewardProgress = EMPTY_REWARD_PROGRESS,
+  rewardProgress = { count: 0, target: 5 },
 }: WalletStatusProps) {
   const { address, isConnected } = useAppKitAccount({ namespace: "eip155" });
   const { chainId, switchNetwork } = useAppKitNetwork();
-  const [karmaSummary, setKarmaSummary] = useState<KarmaSummary | null>(null);
+  const [karmaInfo, setKarmaInfo] = useState<KarmaInfo | null>(null);
   const [karmaError, setKarmaError] = useState("");
   const [isLoadingKarma, setIsLoadingKarma] = useState(false);
   const [isSwitching, setIsSwitching] = useState(false);
@@ -80,7 +64,7 @@ export default function WalletStatus({
 
     async function loadKarma() {
       if (!address || !isConnected) {
-        setKarmaSummary(null);
+        setKarmaInfo(null);
         setKarmaError("");
         return;
       }
@@ -96,29 +80,27 @@ export default function WalletStatus({
           throw new Error(payload.error || "Unable to read Karma tier");
         }
 
-        const nextKarmaSummary = payload as KarmaSummary;
-        const nextMatjipBalance = nextKarmaSummary.matjip
-          ? BigInt(nextKarmaSummary.matjip.karmaBalance)
-          : null;
+        const nextKarmaInfo = payload as KarmaInfo;
+        const nextBalance = BigInt(nextKarmaInfo.karmaBalance);
         const previousBalance = previousKarmaBalanceRef.current;
 
         if (!isCancelled) {
           if (
-            nextMatjipBalance !== null &&
+            nextKarmaInfo.source === "matjip" &&
             previousBalance !== null &&
-            nextMatjipBalance - previousBalance >= MATJIP_REWARD_AMOUNT
+            nextBalance - previousBalance >= MATJIP_REWARD_AMOUNT
           ) {
             setRewardMessage("+3 Matjip Karma awarded");
-          } else if (refreshNonce > 0 && nextMatjipBalance !== null) {
+          } else if (refreshNonce > 0 && nextKarmaInfo.source === "matjip") {
             setRewardMessage("Memory saved. Connected progress updated.");
           }
 
-          previousKarmaBalanceRef.current = nextMatjipBalance;
-          setKarmaSummary(nextKarmaSummary);
+          previousKarmaBalanceRef.current = nextBalance;
+          setKarmaInfo(nextKarmaInfo);
         }
       } catch (error) {
         if (!isCancelled) {
-          setKarmaSummary(null);
+          setKarmaInfo(null);
           setKarmaError(
             error instanceof Error ? error.message : "Unable to read Karma tier"
           );
@@ -156,8 +138,8 @@ export default function WalletStatus({
   return (
     <div className="pointer-events-auto flex flex-col items-end gap-2 text-right">
       {isConnected && (
-        <div className="flex items-center gap-2 rounded-full border border-purple-500/30 bg-gray-950/85 px-3 py-1.5 text-xs text-gray-200 shadow-lg shadow-purple-950/30">
-          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-purple-600 text-[11px] font-bold uppercase text-white">
+        <div className="flex items-center gap-2 rounded-full border border-[#E88788]/30 bg-gray-950/85 px-3 py-1.5 text-xs text-gray-200 shadow-lg shadow-[#E88788]/20">
+          <div className="flex h-6 w-6 items-center justify-center rounded-full bg-[#E88788] text-[11px] font-bold uppercase text-white">
             {addressLabel.charAt(2) || "?"}
           </div>
           <div className="font-medium text-white leading-tight">
@@ -167,7 +149,7 @@ export default function WalletStatus({
       )}
 
       {isConnected && (
-        <div className="max-w-[260px] rounded-lg border border-purple-500/30 bg-gray-950/85 px-3 py-2 text-xs text-gray-200 shadow-lg shadow-purple-950/30">
+        <div className="max-w-[260px] rounded-lg border border-[#E88788]/30 bg-gray-950/85 px-3 py-2 text-xs text-gray-200 shadow-lg shadow-[#E88788]/20">
           <div
             className={
               isOnStatusHoodi ? "text-emerald-300" : "text-amber-300"
@@ -183,90 +165,50 @@ export default function WalletStatus({
               type="button"
               onClick={handleSwitchNetwork}
               disabled={isSwitching}
-              className="mt-2 rounded-md bg-purple-600 px-3 py-1 text-white transition hover:bg-purple-500 disabled:cursor-not-allowed disabled:bg-slate-600"
+              className="mt-2 rounded-md bg-[#E88788] px-3 py-1 text-white transition hover:bg-[#d47778] disabled:cursor-not-allowed disabled:bg-slate-600"
             >
               {isSwitching ? "Switching..." : "Switch to Hoodi"}
             </button>
           )}
 
           {isOnStatusHoodi && (
-            <div className="mt-2 border-t border-purple-500/20 pt-2 text-gray-300">
+            <div className="mt-2 border-t border-[#E88788]/20 pt-2 text-gray-300">
               {isLoadingKarma && <div>Refreshing Karma...</div>}
               {karmaError && (
                 <div className="text-amber-300">
                   Karma unavailable: {karmaError}
                 </div>
               )}
-              {karmaSummary && (
+              {karmaInfo && (
                 <>
-                  <div className="rounded-md border border-cyan-400/20 bg-cyan-400/10 p-2 text-left">
-                    <div className="font-semibold text-cyan-100">
-                      Real Status Karma
-                    </div>
-                    {karmaSummary.official ? (
-                      <>
-                        <div>
-                          Balance:{" "}
-                          {formatKarmaBalance(
-                            karmaSummary.official.karmaBalance
-                          )}
-                        </div>
-                        <div>
-                          Tier: {karmaSummary.official.tierName || "Unknown"}
-                        </div>
-                        <div>
-                          Quota: {karmaSummary.official.txPerEpoch} tx / epoch
-                        </div>
-                        <div
-                          className={
-                            karmaSummary.official.gaslessEligible
-                              ? "text-emerald-300"
-                              : "text-amber-300"
-                          }
-                        >
-                          {karmaSummary.official.gaslessEligible
-                            ? "Real gasless eligible"
-                            : "No real Karma yet"}
-                        </div>
-                      </>
-                    ) : (
-                      <div className="text-amber-300">
-                        {karmaSummary.errors?.official ||
-                          "Real Status Karma unavailable"}
-                      </div>
-                    )}
-                    <div className="mt-1 text-[11px] leading-snug text-gray-400">
-                      Controls official Status Network gasless eligibility.
-                    </div>
+                  <div className="font-semibold text-white">
+                    {karmaInfo.source === "matjip" ? "Matjip Karma" : "Official Karma"}:{" "}
+                    {formatKarmaBalance(karmaInfo.karmaBalance)}
                   </div>
-
-                  <div className="mt-2 rounded-md border border-emerald-500/20 bg-emerald-500/10 p-2 text-left">
-                    <div className="font-semibold text-emerald-100">
-                      Demo Matjip Karma
-                    </div>
-                    {karmaSummary.matjip ? (
-                      <>
-                        <div>
-                          Balance:{" "}
-                          {formatKarmaBalance(karmaSummary.matjip.karmaBalance)}
-                        </div>
-                        <div>
-                          Demo tier: {karmaSummary.matjip.tierName || "None"}
-                        </div>
-                        <div>
-                          Demo quota: {karmaSummary.matjip.txPerEpoch} tx /
-                          epoch
-                        </div>
-                      </>
-                    ) : (
-                      <div className="text-amber-300">
-                        {karmaSummary.errors?.matjip ||
-                          "Demo Matjip Karma unavailable"}
-                      </div>
-                    )}
-                    <div className="mt-2">
+                  <div>Tier: {karmaInfo.tierName || "Unknown"}</div>
+                  <div>
+                    {karmaInfo.source === "matjip" ? "Demo quota" : "Quota"}:{" "}
+                    {karmaInfo.txPerEpoch} tx / epoch
+                  </div>
+                  <div
+                    className={
+                      karmaInfo.gaslessEligible
+                        ? "text-emerald-300"
+                        : "text-amber-300"
+                    }
+                  >
+                    {karmaInfo.gaslessEligible
+                      ? karmaInfo.source === "matjip"
+                        ? "Demo reward tier"
+                        : "Gasless eligible"
+                      : karmaInfo.source === "matjip"
+                        ? "No Matjip Karma yet"
+                        : "No official Karma yet"}
+                  </div>
+                  {karmaInfo.source === "matjip" && (
+                    <div className="mt-2 rounded-md border border-emerald-500/20 bg-emerald-500/10 p-2 text-left">
                       <div className="flex items-center justify-between text-[11px] text-emerald-200">
-                        <span>Best connected region</span>
+                        <span>Connected progress</span>
                         <span>
                           {rewardProgress.count}/{rewardProgress.target}
                         </span>
@@ -283,25 +225,20 @@ export default function WalletStatus({
                         />
                       </div>
                       <div className="mt-1 text-[11px] leading-snug text-gray-300">
-                        Showing the closest region to a reward. Earn +3 when
-                        any 5 nearby unclaimed memories connect.
+                        Earn +3 when 5 nearby memories connect on the map.
                       </div>
-                      {rewardProgress.regionCount > 1 && (
-                        <div className="mt-1 text-[11px] leading-snug text-gray-400">
-                          {rewardProgress.regionCount} regions in progress
-                        </div>
-                      )}
                     </div>
-                    <div className="mt-1 text-[11px] leading-snug text-gray-400">
-                      App-level soulbound reward for this hackathon demo. Demo
-                      Karma does not grant real gasless transactions.
-                    </div>
-                  </div>
+                  )}
                   {rewardMessage && (
                     <div className="mt-2 rounded-md border border-emerald-400/30 bg-emerald-400/10 px-2 py-1 text-emerald-200">
                       {rewardMessage}
                     </div>
                   )}
+                  <div className="mt-1 text-[11px] leading-snug text-gray-400">
+                    {karmaInfo.source === "matjip"
+                      ? "Demo soulbound Karma mirrors Status tiers; official Status Karma still controls real gasless eligibility."
+                      : "Memory activity may update after Status processes network usage."}
+                  </div>
                 </>
               )}
             </div>

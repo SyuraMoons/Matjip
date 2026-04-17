@@ -11,8 +11,6 @@ export type KarmaProgressMemory = {
 export type KarmaRewardProgress = {
   count: number;
   target: number;
-  regionCount: number;
-  bestRegionSize: number;
 };
 
 function areConnected(first: KarmaProgressMemory, second: KarmaProgressMemory) {
@@ -33,7 +31,6 @@ export function calculateKarmaRewardProgress(
 ): KarmaRewardProgress {
   const visited = new Set<number>();
   let bestUnclaimedCount = 0;
-  let regionCount = 0;
 
   for (const memory of memories) {
     if (visited.has(memory.id)) continue;
@@ -61,17 +58,11 @@ export function calculateKarmaRewardProgress(
       }
     }
 
-    if (unclaimedCount > 0) {
-      regionCount++;
-    }
-
     bestUnclaimedCount = Math.max(bestUnclaimedCount, unclaimedCount);
   }
 
   return {
     count: Math.min(bestUnclaimedCount, KARMA_REWARD_PROGRESS_TARGET),
     target: KARMA_REWARD_PROGRESS_TARGET,
-    regionCount,
-    bestRegionSize: bestUnclaimedCount,
   };
 }

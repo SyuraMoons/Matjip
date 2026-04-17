@@ -1,74 +1,20 @@
 # Matjip
 
-Matjip is a privacy-first spatial memory diary built on Status Network Hoodi.
-It helps people who document their lives remember experiences with context, not
-just store photos in a camera roll or post them into a feed.
+Matjip is a memory map on Status Network Hoodi. Users connect a wallet, add a
+photo memory, upload metadata and images to IPFS, then anchor the memory
+on-chain with location coordinates.
 
-People already capture everything: photos, captions, journals, voice notes, and
-stories. But those memories become scattered across camera rolls and social
-platforms. Feeds are built for sharing and engagement, not long-term recall.
-Over time, the details that made a place meaningful become hard to reconstruct.
+The app also includes a hackathon demo reward system called Matjip Karma. It is
+a mock soulbound Karma token that mirrors Status Karma tiers while third-party
+app reward minting is not available. When 5 nearby memories connect on the map,
+the triggering wallet earns +3 Matjip Karma.
 
-Matjip makes memory spatial. Users add photo memories to real locations, store
-media and metadata on IPFS, and anchor each memory on-chain through
-`MemoryRegistry`. Instead of a flat feed, users see a living map of where their
-memories happened.
-
-Every memory reveals part of the map. When 5 nearby memories connect, they
-create a larger revealed area and the triggering wallet earns +3 demo Matjip
-Karma. This turns reflection into a lightweight progression loop: earn by
-remembering, explore by adding depth, and grow the map over time.
-
-## Problem
-
-People who document their lives need a way to recall their experiences without
-forgetting the depth that made them meaningful.
-
-Camera rolls and social feeds flatten memories into timelines. They preserve
-files, but they do not preserve the feeling of where something happened, what
-surrounded it, or how moments connected over time. Matjip uses place as the
-organizing layer because experiences are easier to revisit when they are tied to
-locations.
-
-## Solution
-
-Matjip is a geolocation-based memory diary:
-
-- memories are attached to real places, not only timestamps
-- photos and metadata are stored on IPFS through Pinata
-- the contract stores a small public anchor for each memory
-- the map reveals areas around saved memories instead of showing a flat feed
-- connected memories reward repeated reflection and deeper exploration
-- real Status Karma is displayed, while demo Matjip Karma models app-level
-  contribution reputation
-
-The result is a user-owned archive that feels more like a private life map than
-a public social feed.
+Matjip Karma is not official Status Karma and does not control real Status
+Network gasless eligibility.
 
 ## Live Demo
 
 https://matjip-seven.vercel.app/
-
-## Status Network Integration
-
-Matjip is designed around the Status Network stack:
-
-- **Real Status Karma:** the app reads the connected wallet's real Status Karma
-  from official Status contracts and displays balance, tier, quota, and gasless
-  eligibility.
-- **Demo Matjip Karma:** the app deploys a mock soulbound Karma token to show how
-  app-specific reputation rewards could work while third-party apps cannot mint
-  native Status Karma directly.
-- **Gasless-ready transactions:** memory saves are prepared through
-  `linea_estimateGas`, matching the Status gasless path.
-- **RLN fit:** memory capture is a frequent lightweight action, so Status
-  Network's Karma and RLN model is a natural fit for supporting repeated
-  entries while constraining abusive throughput at the network layer.
-
-Matjip Karma is not official Status Karma and does not control real Status
-Network gasless eligibility. It is a hackathon demo layer for showing how
-contribution-based app reputation could work once native app rewards are
-available.
 
 ## Status Hoodi Gasless Status
 

@@ -72,8 +72,6 @@ export default function Home() {
     useState<KarmaRewardProgress>({
       count: 0,
       target: 5,
-      regionCount: 0,
-      bestRegionSize: 0,
     });
   const { isConnected } = useAppKitAccount({ namespace: "eip155" });
   const { disconnect } = useDisconnect();
@@ -104,12 +102,9 @@ export default function Home() {
       {/* Header overlay */}
       <div className="absolute top-0 left-0 right-0 z-[1000] flex items-start justify-between gap-4 px-6 py-4 pointer-events-none">
         <div>
-          <h1 className="text-white text-xl font-bold tracking-tight">
-            matjib
+          <h1 className="text-black text-xl font-bold tracking-tight">
+            맛집
           </h1>
-          <p className="text-purple-400 text-xs tracking-widest uppercase mt-0.5">
-            Your world, mapped in memories
-          </p>
         </div>
         <div className="flex flex-col items-end gap-3">
           <WalletStatus
@@ -132,8 +127,8 @@ export default function Home() {
                 strokeLinejoin="round"
               >
                 <path d="M7 5h14a2 2 0 0 1 2 2v20l-9-4-9 4V7a2 2 0 0 1 2-2z" fill="#e8c674" />
-                <line x1="16" y1="12" x2="16" y2="20" />
-                <line x1="12" y1="16" x2="20" y2="16" />
+                <line x1="14" y1="11" x2="14" y2="19" />
+                <line x1="10" y1="15" x2="18" y2="15" />
               </svg>
             </TileButton>
             <TileButton onClick={() => disconnect()} label="Sign out">
@@ -156,10 +151,6 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Persistence badge */}
-      <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-[1000] bg-gray-900/90 border border-purple-500/30 text-purple-300 text-xs px-4 py-2 rounded-full tracking-wide shadow-lg shadow-purple-900/20 pointer-events-none">
-        Onchain memories with IPFS metadata
-      </div>
     </div>
   );
 }
