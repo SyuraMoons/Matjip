@@ -124,6 +124,129 @@ function buildChronologicalPairs(
   return pairs;
 }
 
+// Union-Find data structure for connected component detection
+class UnionFind {
+  parent: globalThis.Map<number, number>;
+
+  constructor(ids: number[]) {
+    this.parent = new globalThis.Map();
+    ids.forEach((id) => this.parent.set(id, id));
+  }
+
+  find(x: number): number {
+    if (!this.parent.has(x)) return x;
+    const parent = this.parent.get(x)!;
+    if (parent !== x) {
+      this.parent.set(x, this.find(parent));
+    }
+    return this.parent.get(x)!;
+  }
+
+  union(x: number, y: number) {
+    const px = this.find(x);
+    const py = this.find(y);
+    if (px !== py) {
+      this.parent.set(px, py);
+    }
+  }
+}
+
+// Build connected groups from route pairs
+function buildConnectedGroups(
+  memories: MemoryData[],
+  pairs: Array<[MemoryData, MemoryData]>
+): MemoryData[][] {
+  // Deduplicate input memories by id first to prevent duplicate counting
+  const uniqueMemoriesMap = new globalThis.Map<number, MemoryData>();
+  for (const memory of memories) {
+    uniqueMemoriesMap.set(memory.id, memory);
+  }
+  const uniqueMemories = Array.from(uniqueMemoriesMap.values());
+
+  const uf = new UnionFind(uniqueMemories.map((m) => m.id));
+
+  for (const [a, b] of pairs) {
+    uf.union(a.id, b.id);
+  }
+
+  const groups = new globalThis.Map<number, MemoryData[]>();
+  for (const memory of uniqueMemories) {
+    const root = uf.find(memory.id);
+    if (!groups.has(root)) {
+      groups.set(root, []);
+    }
+    groups.get(root)!.push(memory);
+  }
+
+  return Array.from(groups.values());
+}
+
+// Haversine distance: calculate geodetic distance between two lat/lng points
+function haversineDistance(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6371000; // Earth radius in meters
+  const φ1 = (lat1 * Math.PI) / 180;
+  const φ2 = (lat2 * Math.PI) / 180;
+  const Δφ = ((lat2 - lat1) * Math.PI) / 180;
+  const Δλ = ((lng2 - lng1) * Math.PI) / 180;
+
+  const a =
+    Math.sin(Δφ / 2) * Math.sin(Δφ / 2) +
+    Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ / 2) * Math.sin(Δλ / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+  return R * c;
+}
+
+// Compute group span: maximum distance between any two pins in the group
+function computeGroupSpan(group: MemoryData[]): number {
+  if (group.length < 2) return 0;
+
+  let maxSpan = 0;
+  for (let i = 0; i < group.length; i++) {
+    for (let j = i + 1; j < group.length; j++) {
+      const dist = haversineDistance(group[i].lat, group[i].lng, group[j].lat, group[j].lng);
+      maxSpan = Math.max(maxSpan, dist);
+    }
+  }
+
+  return maxSpan;
+}
+
+// Zone level definition
+type ZoneLevel = {
+  level: number;
+  multiplier: number;
+};
+
+// Compute zone level based on group size and span
+function computeZoneLevel(group: MemoryData[]): ZoneLevel {
+  const size = group.length;
+  const span = computeGroupSpan(group);
+
+  console.log(
+    `[Zone] Computing level: size=${size}, span=${span.toFixed(0)}m`,
+    group.map((m) => ({ id: m.id, title: m.title }))
+  );
+
+  // Level 3: ≥7 pins AND span ≥1000m
+  if (size >= 7 && span >= 1000) {
+    return { level: 3, multiplier: 2.0 };
+  }
+
+  // Level 2: ≥5 pins AND span ≥700m
+  if (size >= 5 && span >= 700) {
+    return { level: 2, multiplier: 1.5 };
+  }
+
+  // Level 1: ≥3 pins AND span ≥400m
+  if (size >= 3 && span >= 400) {
+    return { level: 1, multiplier: 1.3 };
+  }
+
+  // No level: multiplier = 1 (no bonus)
+  return { level: 0, multiplier: 1.0 };
+}
+
 // Fetch real route geometry from OSRM API following actual street network
 async function fetchRoutePoints(
   a: MemoryData,
@@ -1251,6 +1374,40 @@ export default function Map({
   }, [memories]);
 
   const handleSaveMemory = async (memory: MemoryData) => {
+    // Add memory to list and compute zone level/multiplier
+    const updatedMemories = upsertMemory(memoriesRef.current, memory);
+
+    // Rebuild groups with the new memory included
+    if (mapInstanceRef.current) {
+      const map = mapInstanceRef.current;
+      const pairs = buildChronologicalPairs(map, updatedMemories, 1500);
+      const groups = buildConnectedGroups(updatedMemories, pairs);
+
+      // Find the group containing the new memory
+      let newMemoryGroup: MemoryData[] | null = null;
+      for (const group of groups) {
+        if (group.find((m) => m.id === memory.id)) {
+          newMemoryGroup = group;
+          break;
+        }
+      }
+
+      // Compute zone level and apply multiplier
+      if (newMemoryGroup) {
+        const { level, multiplier } = computeZoneLevel(newMemoryGroup);
+
+        // Apply multiplier to this new pin only (baseReward = 1)
+        const baseReward = 1;
+        memory.reward = baseReward * multiplier;
+        memory.multiplier = multiplier;
+        memory.zoneLevel = level;
+
+        console.log(
+          `[Reward] New memory ${memory.id}: level=${level}, multiplier=${multiplier}, reward=${memory.reward.toFixed(2)}`
+        );
+      }
+    }
+
     setMemories((prev) => upsertMemory(prev, memory));
     mapInstanceRef.current?.flyTo([memory.lat, memory.lng], 15, {
       animate: true,
