@@ -225,7 +225,7 @@ export default function WalletStatus({
                         />
                       </div>
                       <div className="mt-1 text-[11px] leading-snug text-gray-300">
-                        Earn +3 when 5 connected memories reveal a larger area.
+                        Earn +3 when 5 nearby memories connect on the map.
                       </div>
                     </div>
                   )}

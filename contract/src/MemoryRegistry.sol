@@ -47,7 +47,7 @@ contract MemoryRegistry {
     int32 private constant MAX_LAT_E6 = 90_000000;
     int32 private constant MIN_LNG_E6 = -180_000000;
     int32 private constant MAX_LNG_E6 = 180_000000;
-    uint256 private constant CONNECTION_DISTANCE_E6 = 2_245;
+    uint256 private constant CONNECTION_DISTANCE_E6 = 4_500;
     uint256 private constant KARMA_GROUP_SIZE = 5;
     uint256 private constant KARMA_REWARD = 3 ether;
 

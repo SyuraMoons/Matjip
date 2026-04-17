@@ -1,6 +1,5 @@
 export const KARMA_REWARD_PROGRESS_TARGET = 5;
-
-const CONNECTION_DISTANCE_E6 = 2_245;
+export const KARMA_PROGRESS_CONNECTION_METERS = 400;
 
 export type KarmaProgressMemory = {
   id: number;
@@ -14,17 +13,16 @@ export type KarmaRewardProgress = {
   target: number;
 };
 
-function toE6(value: number) {
-  return Math.round(value * 1_000_000);
-}
-
 function areConnected(first: KarmaProgressMemory, second: KarmaProgressMemory) {
-  const latDiff = toE6(first.lat) - toE6(second.lat);
-  const lngDiff = toE6(first.lng) - toE6(second.lng);
+  const latMeters = 111_320;
+  const meanLat = ((first.lat + second.lat) / 2) * (Math.PI / 180);
+  const lngMeters = latMeters * Math.cos(meanLat);
+  const latDiffMeters = (first.lat - second.lat) * latMeters;
+  const lngDiffMeters = (first.lng - second.lng) * lngMeters;
 
   return (
-    latDiff * latDiff + lngDiff * lngDiff <=
-    CONNECTION_DISTANCE_E6 * CONNECTION_DISTANCE_E6
+    latDiffMeters * latDiffMeters + lngDiffMeters * lngDiffMeters <=
+    KARMA_PROGRESS_CONNECTION_METERS * KARMA_PROGRESS_CONNECTION_METERS
   );
 }
 

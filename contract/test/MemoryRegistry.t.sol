@@ -144,13 +144,13 @@ contract MemoryRegistryTest is Test {
     function testRewardsThreeKarmaAtFiveConnectedMemories() public {
         vm.startPrank(poster);
         _createMemoryAt(0, 0);
-        _createMemoryAt(0, 1_000);
-        _createMemoryAt(0, 2_000);
-        _createMemoryAt(0, 3_000);
+        _createMemoryAt(0, 4_000);
+        _createMemoryAt(0, 8_000);
+        _createMemoryAt(0, 12_000);
 
         vm.expectEmit(true, false, true, true);
         emit KarmaRewarded(poster, 3 ether, 4, 5);
-        _createMemoryAt(0, 4_000);
+        _createMemoryAt(0, 16_000);
         vm.stopPrank();
 
         assertEq(karma.balanceOf(poster), 3 ether);
@@ -176,7 +176,7 @@ contract MemoryRegistryTest is Test {
     function testSixthConnectedMemoryDoesNotDoubleCountClaimedMemories() public {
         vm.startPrank(poster);
         for (int32 i = 0; i < 6; i++) {
-            _createMemoryAt(0, i * 1_000);
+            _createMemoryAt(0, i * 4_000);
         }
         vm.stopPrank();
 
@@ -188,7 +188,7 @@ contract MemoryRegistryTest is Test {
     function testTenthConnectedMemoryCanTriggerSecondReward() public {
         vm.startPrank(poster);
         for (int32 i = 0; i < 10; i++) {
-            _createMemoryAt(0, i * 1_000);
+            _createMemoryAt(0, i * 4_000);
         }
         vm.stopPrank();
 
