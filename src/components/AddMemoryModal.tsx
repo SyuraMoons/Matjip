@@ -622,72 +622,74 @@ export default function AddMemoryModal({
 
           {step === "location" && (
             <div className="space-y-6">
-              {/* Location Name with Autocomplete */}
-              <div className="relative">
-                <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Location Name (Optional)
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={manualLocation}
-                    onChange={(e) => handleLocationInputChange(e.target.value)}
-                    onFocus={() => manualLocation && setShowSuggestions(true)}
-                    placeholder="e.g., Tokyo, Japan"
-                    className="w-full bg-slate-800 border border-purple-500/30 rounded-lg px-4 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+              <div className="flex gap-6">
+                {/* Location Name with Autocomplete - Left Side */}
+                <div className="relative w-1/3">
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Location Name (Optional)
+                  </label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={manualLocation}
+                      onChange={(e) => handleLocationInputChange(e.target.value)}
+                      onFocus={() => manualLocation && setShowSuggestions(true)}
+                      placeholder="e.g., Tokyo, Japan"
+                      className="w-full bg-slate-800 border border-purple-500/30 rounded-lg px-4 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+                    />
+                    
+                    {/* Search Results Dropdown */}
+                    {showSuggestions && manualLocation.trim().length > 0 && (
+                      <div
+                        ref={suggestionsRef}
+                        className="absolute top-full left-0 right-0 mt-1 bg-slate-800 border border-purple-500/30 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto"
+                      >
+                        {isSearching && (
+                          <div className="px-4 py-3 text-gray-400 text-sm flex items-center gap-2">
+                            <div className="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
+                            Searching...
+                          </div>
+                        )}
+                        
+                        {!isSearching && locationSearchResults.length > 0 && (
+                          locationSearchResults.map((location, index) => (
+                            <button
+                              key={`${location.lat}-${location.lng}-${index}`}
+                              onClick={() => handleLocationSelect(location)}
+                              className="w-full text-left px-4 py-3 hover:bg-purple-500/20 border-b border-purple-500/10 last:border-b-0 transition"
+                            >
+                              <div className="text-sm text-gray-100 font-medium">{location.name}</div>
+                              <div className="text-xs text-gray-400 truncate">{location.displayName}</div>
+                            </button>
+                          ))
+                        )}
+                        
+                        {!isSearching && locationSearchResults.length === 0 && (
+                          <div className="px-4 py-3 text-gray-400 text-sm">No locations found</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Map Picker - Right Side */}
+                <div className="w-2/3">
+                  <label className="block text-sm font-medium text-gray-300 mb-2">
+                    Click on the map to set exact location *
+                  </label>
+                  <div
+                    ref={mapPickerRef}
+                    className="w-full h-72 rounded-lg border border-purple-500/30 overflow-hidden bg-slate-900"
                   />
-                  
-                  {/* Search Results Dropdown */}
-                  {showSuggestions && manualLocation.trim().length > 0 && (
-                    <div
-                      ref={suggestionsRef}
-                      className="absolute top-full left-0 right-0 mt-1 bg-slate-800 border border-purple-500/30 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto"
+                  {!mapPickerRef.current?.childElementCount && (
+                    <button
+                      onClick={initMapPicker}
+                      className="mt-2 w-full bg-purple-600 hover:bg-purple-700 text-white py-2 rounded-lg transition"
                     >
-                      {isSearching && (
-                        <div className="px-4 py-3 text-gray-400 text-sm flex items-center gap-2">
-                          <div className="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
-                          Searching...
-                        </div>
-                      )}
-                      
-                      {!isSearching && locationSearchResults.length > 0 && (
-                        locationSearchResults.map((location, index) => (
-                          <button
-                            key={`${location.lat}-${location.lng}-${index}`}
-                            onClick={() => handleLocationSelect(location)}
-                            className="w-full text-left px-4 py-3 hover:bg-purple-500/20 border-b border-purple-500/10 last:border-b-0 transition"
-                          >
-                            <div className="text-sm text-gray-100 font-medium">{location.name}</div>
-                            <div className="text-xs text-gray-400 truncate">{location.displayName}</div>
-                          </button>
-                        ))
-                      )}
-                      
-                      {!isSearching && locationSearchResults.length === 0 && (
-                        <div className="px-4 py-3 text-gray-400 text-sm">No locations found</div>
-                      )}
-                    </div>
+                      Load Map
+                    </button>
                   )}
                 </div>
-              </div>
-
-              {/* Map Picker */}
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
-                  Click on the map to set exact location *
-                </label>
-                <div
-                  ref={mapPickerRef}
-                  className="w-full h-72 rounded-lg border border-purple-500/30 overflow-hidden bg-slate-900"
-                />
-                {!mapPickerRef.current?.childElementCount && (
-                  <button
-                    onClick={initMapPicker}
-                    className="mt-2 w-full bg-purple-600 hover:bg-purple-700 text-white py-2 rounded-lg transition"
-                  >
-                    Load Map
-                  </button>
-                )}
               </div>
 
               {locationCoords && (
