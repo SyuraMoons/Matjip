@@ -1,4 +1,4 @@
-import { getKarmaSummary } from "@/lib/status";
+import { getKarmaInfo } from "@/lib/status";
 
 export const runtime = "nodejs";
 
@@ -8,7 +8,7 @@ export async function GET(
 ) {
   try {
     const { address } = await params;
-    const karmaInfo = await getKarmaSummary(address);
+    const karmaInfo = await getKarmaInfo(address);
 
     return Response.json(karmaInfo);
   } catch (error) {
