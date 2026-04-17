@@ -37,16 +37,6 @@ export type KarmaInfo = {
   source: "official" | "matjip";
 };
 
-export type KarmaSummary = {
-  address: string;
-  official?: KarmaInfo;
-  matjip?: KarmaInfo;
-  errors?: {
-    official?: string;
-    matjip?: string;
-  };
-};
-
 function rpcUrl() {
   const url =
     process.env.STATUS_HOODI_RPC_URL || process.env.NEXT_PUBLIC_STATUS_RPC_URL;
@@ -197,42 +187,30 @@ async function ethCall(to: string, data: string, label: string) {
   return payload.result;
 }
 
-function validateAndNormalizeAddress(address: string) {
+export async function getKarmaInfo(address: string): Promise<KarmaInfo> {
   const normalizedAddress = address.toLowerCase();
 
   if (!isAddress(normalizedAddress)) {
     throw new Error("Invalid wallet address");
   }
 
-  return normalizedAddress;
-}
+  if (MOCK_KARMA_ADDRESS) {
+    const balanceResult = await ethCall(
+      MOCK_KARMA_ADDRESS,
+      `${BALANCE_OF_SELECTOR}${encodeAddress(normalizedAddress)}`,
+      "MockKarma.balanceOf"
+    );
+    const karmaBalance = hexToBigInt(balanceResult, "MockKarma.balanceOf");
+    const tier = mockTierForBalance(karmaBalance);
 
-export async function getMatjipKarmaInfo(address: string): Promise<KarmaInfo> {
-  const normalizedAddress = validateAndNormalizeAddress(address);
-
-  if (!MOCK_KARMA_ADDRESS) {
-    throw new Error("NEXT_PUBLIC_MOCK_KARMA_ADDRESS is not configured");
+    return {
+      address: normalizedAddress,
+      karmaBalance: karmaBalance.toString(),
+      ...tier,
+      gaslessEligible: karmaBalance > BigInt(0),
+      source: "matjip",
+    };
   }
-
-  const balanceResult = await ethCall(
-    MOCK_KARMA_ADDRESS,
-    `${BALANCE_OF_SELECTOR}${encodeAddress(normalizedAddress)}`,
-    "MockKarma.balanceOf"
-  );
-  const karmaBalance = hexToBigInt(balanceResult, "MockKarma.balanceOf");
-  const tier = mockTierForBalance(karmaBalance);
-
-  return {
-    address: normalizedAddress,
-    karmaBalance: karmaBalance.toString(),
-    ...tier,
-    gaslessEligible: karmaBalance > BigInt(0),
-    source: "matjip",
-  };
-}
-
-export async function getOfficialKarmaInfo(address: string): Promise<KarmaInfo> {
-  const normalizedAddress = validateAndNormalizeAddress(address);
 
   const balanceResult = await ethCall(
     KARMA_ADDRESS,
@@ -266,41 +244,4 @@ export async function getOfficialKarmaInfo(address: string): Promise<KarmaInfo> 
     gaslessEligible: karmaBalance > BigInt(0),
     source: "official",
   };
-}
-
-export async function getKarmaSummary(address: string): Promise<KarmaSummary> {
-  const normalizedAddress = validateAndNormalizeAddress(address);
-  const summary: KarmaSummary = {
-    address: normalizedAddress,
-  };
-  const errors: NonNullable<KarmaSummary["errors"]> = {};
-
-  const [officialResult, matjipResult] = await Promise.allSettled([
-    getOfficialKarmaInfo(normalizedAddress),
-    getMatjipKarmaInfo(normalizedAddress),
-  ]);
-
-  if (officialResult.status === "fulfilled") {
-    summary.official = officialResult.value;
-  } else {
-    errors.official =
-      officialResult.reason instanceof Error
-        ? officialResult.reason.message
-        : "Unable to read real Status Karma";
-  }
-
-  if (matjipResult.status === "fulfilled") {
-    summary.matjip = matjipResult.value;
-  } else {
-    errors.matjip =
-      matjipResult.reason instanceof Error
-        ? matjipResult.reason.message
-        : "Unable to read demo Matjip Karma";
-  }
-
-  if (errors.official || errors.matjip) {
-    summary.errors = errors;
-  }
-
-  return summary;
 }

@@ -32,23 +32,9 @@ export type MemoryData = {
 };
 
 type KarmaInfo = {
-  address: string;
   karmaBalance: string;
-  tierId: number;
-  tierName: string;
-  txPerEpoch: number;
   gaslessEligible: boolean;
   source: "official" | "matjip";
-};
-
-type KarmaSummary = {
-  address: string;
-  official?: KarmaInfo;
-  matjip?: KarmaInfo;
-  errors?: {
-    official?: string;
-    matjip?: string;
-  };
 };
 
 type UploadedMemory = {
@@ -525,32 +511,7 @@ export default function AddMemoryModal({
       }
     });
 
-    // Click to select location
-    const onMapClick = (e: L.LeafletMouseEvent) => {
-      setUploadedMemory(null);
-      setLocationCoords({ lat: e.latlng.lat, lng: e.latlng.lng });
-      
-      // Remove old marker if exists
-      if (markerRef.current) {
-        pickerMap.removeLayer(markerRef.current);
-      }
-
-      // Add new marker
-      markerRef.current = L.marker([e.latlng.lat, e.latlng.lng], {
-        icon: L.icon({
-          iconUrl:
-            "https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-violet.png",
-          shadowUrl:
-            "https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png",
-          iconSize: [25, 41],
-          iconAnchor: [12, 41],
-          popupAnchor: [1, -34],
-          shadowSize: [41, 41],
-        }),
-      }).addTo(pickerMap);
-    };
-
-    pickerMap.on("click", onMapClick);
+    // Map is view-only — location must be selected via search
   };
 
   const assertCanSubmit = async () => {
@@ -569,33 +530,17 @@ export default function AddMemoryModal({
     setSubmitStep("karma");
     try {
       const response = await fetch(`/api/karma/${address}`);
-      const karmaSummary = (await response.json()) as KarmaSummary & {
-        error?: string;
-      };
+      const karmaInfo = (await response.json()) as KarmaInfo & { error?: string };
 
       if (!response.ok) {
-        throw new Error(karmaSummary.error || "Unable to check Karma");
+        throw new Error(karmaInfo.error || "Unable to check Karma");
       }
 
-      const officialBalance = karmaSummary.official
-        ? BigInt(karmaSummary.official.karmaBalance)
-        : BigInt(0);
-      const matjipBalance = karmaSummary.matjip
-        ? BigInt(karmaSummary.matjip.karmaBalance)
-        : BigInt(0);
-      const hasOfficialKarma =
-        Boolean(karmaSummary.official?.gaslessEligible) &&
-        officialBalance > BigInt(0);
-
-      if (!hasOfficialKarma) {
+      if (!karmaInfo.gaslessEligible || BigInt(karmaInfo.karmaBalance) <= BigInt(0)) {
         setSubmitNotice(
-          matjipBalance > BigInt(0)
-            ? "Demo Matjip Karma found, but real Status Karma controls official gasless eligibility. The wallet can still use the current Hoodi paid fallback."
-            : "No real Status Karma found yet. Demo Matjip Karma is earned when 5 connected memories reveal a larger area."
-        );
-      } else if (karmaSummary.errors?.matjip) {
-        setSubmitNotice(
-          "Real Status Karma found. Demo Matjip Karma is unavailable right now, so connected rewards may refresh later."
+          karmaInfo.source === "matjip"
+            ? "No Matjip Karma yet. Add connected memories to earn demo Karma."
+            : "No official Status Karma found yet. The wallet can still submit with the current Hoodi paid fallback."
         );
       }
     } catch (error) {
@@ -817,7 +762,7 @@ export default function AddMemoryModal({
 
   return (
     <div
-      className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[9999] flex items-center justify-center p-4"
+      className="fixed inset-0 bg-black/40 z-[9999] flex items-center justify-center p-4"
       onClick={(e) => {
         if (e.target === e.currentTarget) {
           handleCloseModal();
@@ -825,28 +770,31 @@ export default function AddMemoryModal({
       }}
     >
       <div
-        className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-2xl border border-purple-500/30 shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
+        className="relative max-w-2xl w-full max-h-[90vh] overflow-y-auto rounded-2xl border-2 border-[#c9b487] bg-[#faf1d8] shadow-[0_6px_0_#b89f6a,0_12px_30px_rgba(40,25,10,0.4)]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
-        <div className="sticky top-0 bg-gradient-to-r from-slate-900 to-slate-800 border-b border-purple-500/20 px-6 py-4 flex items-center justify-between backdrop-blur-sm">
-          <h2 className="text-xl font-bold text-gray-100">
-            {step === "photos" && "📸 Add Photos"}
-            {step === "details" && "✏️ Add Details"}
-            {step === "location" && "📍 Set Location"}
+        <div className="sticky top-0 z-10 flex items-center gap-3 border-b-2 border-[#c9b487] bg-[#efe3c3] px-5 py-3">
+          <svg width="28" height="28" viewBox="0 0 32 32" fill="none" stroke="#4a2c15" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M7 5h14a2 2 0 0 1 2 2v20l-9-4-9 4V7a2 2 0 0 1 2-2z" fill="#e8c674" />
+          </svg>
+          <h2 className="flex-1 text-lg font-bold text-[#2a1a0a]" style={{ fontFamily: "'Architects Daughter', 'Marker Felt', cursive" }}>
+            {step === "photos" && "Add Photos"}
+            {step === "details" && "Add Details"}
+            {step === "location" && "Set Location"}
           </h2>
           <button
             onClick={handleCloseModal}
-            className="text-gray-400 hover:text-gray-200 text-2xl transition"
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-[#c94a4a] text-white shadow-[0_2px_0_#9a3333] transition hover:bg-[#b33e3e] active:translate-y-[1px] active:shadow-none"
           >
             ✕
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-6">
+        <div className="p-5">
           {step === "photos" && (
-            <div className="space-y-6">
+            <div className="space-y-5">
               {/* Upload Area */}
               <div
                 ref={dragRef}
@@ -854,11 +802,11 @@ export default function AddMemoryModal({
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
                 onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-purple-500/40 rounded-xl p-8 cursor-pointer transition hover:border-purple-500/70 hover:bg-purple-500/5 drag-active:border-purple-500 drag-active:bg-purple-500/10 text-center"
+                className="cursor-pointer rounded-xl border-2 border-dashed border-[#c9b487] bg-[#efe3c3] p-8 text-center transition hover:border-[#a08555] hover:bg-[#e8d9b5]"
               >
-                <div className="text-4xl mb-2">📷</div>
-                <p className="text-gray-200 font-medium">Drag photos here</p>
-                <p className="text-gray-400 text-sm">or click to browse</p>
+                <div className="mb-2 text-4xl">📷</div>
+                <p className="font-medium text-[#2a1a0a]">Drag photos here</p>
+                <p className="text-sm text-[#7a6840]">or click to browse</p>
                 <input
                   ref={fileInputRef}
                   type="file"
@@ -872,21 +820,21 @@ export default function AddMemoryModal({
               {/* Photo Preview Grid */}
               {photos.length > 0 && (
                 <div>
-                  <p className="text-sm text-gray-400 mb-3 font-medium">
+                  <p className="mb-3 text-sm font-medium text-[#7a6840]">
                     {photos.length} photo{photos.length !== 1 ? "s" : ""} added
                   </p>
                   <div className="grid grid-cols-4 gap-3 max-h-48 overflow-y-auto">
                     {photos.map((photo, index) => (
-                      <div key={index} className="relative group">
+                      <div key={index} className="group relative rounded-xl border-2 border-[#c9b487] bg-[#efe3c3] p-1 shadow-[0_2px_0_#b89f6a]">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
                         <img
                           src={photo}
                           alt={`Memory photo ${index + 1}`}
-                          className="w-full h-24 object-cover rounded-lg"
+                          className="h-24 w-full rounded-lg object-cover"
                         />
                         <button
                           onClick={() => removePhoto(index)}
-                          className="absolute -top-2 -right-2 bg-red-500 text-white rounded-full w-6 h-6 flex items-center justify-center opacity-0 group-hover:opacity-100 transition"
+                          className="absolute -right-2 -top-2 flex h-6 w-6 items-center justify-center rounded-full bg-[#c94a4a] text-xs text-white opacity-0 shadow-[0_1px_0_#9a3333] transition group-hover:opacity-100"
                         >
                           ✕
                         </button>
@@ -899,10 +847,10 @@ export default function AddMemoryModal({
           )}
 
           {step === "details" && (
-            <div className="space-y-6">
+            <div className="space-y-5">
               {/* Title */}
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
+                <label className="mb-2 block text-sm font-semibold text-[#4a2c15]">
                   Memory Title *
                 </label>
                 <input
@@ -913,13 +861,13 @@ export default function AddMemoryModal({
                     setTitle(e.target.value);
                   }}
                   placeholder="e.g., Sunrise at the Temple"
-                  className="w-full bg-slate-800 border border-purple-500/30 rounded-lg px-4 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+                  className="w-full rounded-lg border-2 border-[#c9b487] bg-[#efe3c3] px-4 py-2 text-[#2a1a0a] placeholder-[#a09060] focus:border-[#a08555] focus:outline-none focus:ring-1 focus:ring-[#c9b487]"
                 />
               </div>
 
               {/* Caption */}
               <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">
+                <label className="mb-2 block text-sm font-semibold text-[#4a2c15]">
                   Memory Caption
                 </label>
                 <textarea
@@ -930,19 +878,19 @@ export default function AddMemoryModal({
                   }}
                   placeholder="What was special about this moment?"
                   rows={4}
-                  className="w-full bg-slate-800 border border-purple-500/30 rounded-lg px-4 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500 resize-none"
+                  className="w-full resize-none rounded-lg border-2 border-[#c9b487] bg-[#efe3c3] px-4 py-2 text-[#2a1a0a] placeholder-[#a09060] focus:border-[#a08555] focus:outline-none focus:ring-1 focus:ring-[#c9b487]"
                 />
               </div>
             </div>
           )}
 
           {step === "location" && (
-            <div className="space-y-6">
-              <div className="flex gap-6">
+            <div className="space-y-5">
+              <div className="flex gap-5">
                 {/* Location Name with Autocomplete - Left Side */}
                 <div className="relative w-1/3">
-                  <label className="block text-sm font-medium text-gray-300 mb-2">
-                    Location Name (Optional)
+                  <label className="mb-2 block text-sm font-semibold text-[#4a2c15]">
+                    Location Name
                   </label>
                   <div className="relative">
                     <input
@@ -950,38 +898,38 @@ export default function AddMemoryModal({
                       value={manualLocation}
                       onChange={(e) => handleLocationInputChange(e.target.value)}
                       onFocus={() => manualLocation && setShowSuggestions(true)}
-                      placeholder="e.g., Tokyo, Japan"
-                      className="w-full bg-slate-800 border border-purple-500/30 rounded-lg px-4 py-2 text-gray-100 placeholder-gray-500 focus:outline-none focus:border-purple-500 focus:ring-1 focus:ring-purple-500"
+                      placeholder="Search for a place or restaurant..."
+                      className="location-input w-full rounded-lg border-2 border-[#c9b487] bg-[#efe3c3] px-4 py-2 text-[#2a1a0a] placeholder-[#a09060] focus:border-[#a08555] focus:outline-none focus:ring-1 focus:ring-[#c9b487]"
                     />
-                    
+
                     {/* Search Results Dropdown */}
                     {showSuggestions && manualLocation.trim().length > 0 && (
                       <div
                         ref={suggestionsRef}
-                        className="absolute top-full left-0 right-0 mt-1 bg-slate-800 border border-purple-500/30 rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto"
+                        className="absolute left-0 right-0 top-full z-50 mt-1 max-h-64 overflow-y-auto rounded-lg border-2 border-[#c9b487] bg-[#faf1d8] shadow-lg"
                       >
                         {isSearching && (
-                          <div className="px-4 py-3 text-gray-400 text-sm flex items-center gap-2">
-                            <div className="w-4 h-4 border-2 border-purple-500 border-t-transparent rounded-full animate-spin" />
+                          <div className="flex items-center gap-2 px-4 py-3 text-sm text-[#7a6840]">
+                            <div className="h-4 w-4 rounded-full border-2 border-[#c9b487] border-t-[#4a2c15] animate-spin" />
                             Searching...
                           </div>
                         )}
-                        
+
                         {!isSearching && locationSearchResults.length > 0 && (
                           locationSearchResults.map((location, index) => (
                             <button
                               key={`${location.lat}-${location.lng}-${index}`}
                               onClick={() => handleLocationSelect(location)}
-                              className="w-full text-left px-4 py-3 hover:bg-purple-500/20 border-b border-purple-500/10 last:border-b-0 transition"
+                              className="w-full border-b border-[#c9b487]/40 px-4 py-3 text-left transition last:border-b-0 hover:bg-[#efe3c3]"
                             >
-                              <div className="text-sm text-gray-100 font-medium">{location.name}</div>
-                              <div className="text-xs text-gray-400 truncate">{location.displayName}</div>
+                              <div className="text-sm font-medium text-[#2a1a0a]">{location.name}</div>
+                              <div className="truncate text-xs text-[#7a6840]">{location.displayName}</div>
                             </button>
                           ))
                         )}
-                        
+
                         {!isSearching && locationSearchResults.length === 0 && (
-                          <div className="px-4 py-3 text-gray-400 text-sm">No locations found</div>
+                          <div className="px-4 py-3 text-sm text-[#7a6840]">No places found — try a specific restaurant, shop, or landmark</div>
                         )}
                       </div>
                     )}
@@ -990,17 +938,17 @@ export default function AddMemoryModal({
 
                 {/* Map Picker - Right Side */}
                 <div className="w-2/3">
-                  <label className="block text-sm font-medium text-gray-300 mb-2">
-                    Click on the map to set exact location *
+                  <label className="mb-2 block text-sm font-semibold text-[#4a2c15]">
+                    Map preview
                   </label>
                   <div
                     ref={mapPickerRef}
-                    className="w-full h-72 rounded-lg border border-purple-500/30 overflow-hidden bg-slate-900"
+                    className="h-72 w-full overflow-hidden rounded-lg border-2 border-[#c9b487] bg-[#efe3c3]"
                   />
                   {!isMapLoaded && (
                     <button
                       onClick={initMapPicker}
-                      className="mt-2 w-full bg-purple-600 hover:bg-purple-700 text-white py-2 rounded-lg transition"
+                      className="mt-2 w-full rounded-lg border-2 border-[#c9b487] bg-[#efe3c3] py-2 font-medium text-[#4a2c15] shadow-[0_2px_0_#b89f6a] transition hover:bg-[#e8d9b5]"
                     >
                       Load Map
                     </button>
@@ -1009,8 +957,8 @@ export default function AddMemoryModal({
               </div>
 
               {locationCoords && (
-                <div className="bg-purple-500/10 border border-purple-500/30 rounded-lg p-3">
-                  <p className="text-sm text-gray-300">
+                <div className="rounded-lg border-2 border-[#c9b487] bg-[#efe3c3] p-3">
+                  <p className="text-sm text-[#4a2c15]">
                     📍 Coordinates: {locationCoords.lat.toFixed(4)},{" "}
                     {locationCoords.lng.toFixed(4)}
                   </p>
@@ -1020,10 +968,10 @@ export default function AddMemoryModal({
           )}
 
           {(submitError || submitNotice || uploadedMemory || isSubmitting) && (
-            <div className="mt-6 rounded-lg border border-purple-500/30 bg-slate-950/70 p-3 text-sm text-gray-200">
-              {isSubmitting && <p>{saveButtonLabel}</p>}
+            <div className="mt-5 rounded-lg border-2 border-[#c9b487] bg-[#efe3c3] p-3 text-sm text-[#2a1a0a]">
+              {isSubmitting && <p className="font-medium">{saveButtonLabel}</p>}
               {submitNotice && (
-                <p className="mt-2 text-emerald-200">{submitNotice}</p>
+                <p className="mt-2 text-[#3a6a3a]">{submitNotice}</p>
               )}
               {uploadedMemory && !isSubmitting && (
                 <p>
@@ -1033,16 +981,16 @@ export default function AddMemoryModal({
               )}
               {preparedSave && !isSubmitting && (
                 <div className="mt-3 space-y-3">
-                  <div className="rounded-lg border border-purple-500/30 bg-slate-900/80 p-3">
-                    <p className="text-xs uppercase tracking-[0.16em] text-gray-400">
+                  <div className="rounded-lg border-2 border-[#c9b487] bg-[#faf1d8] p-3">
+                    <p className="text-xs font-semibold uppercase tracking-[0.16em] text-[#7a6840]">
                       Status fee estimate
                     </p>
-                    <p className="mt-1 text-gray-100">
+                    <p className="mt-1 font-medium text-[#2a1a0a]">
                       {preparedSave.isGaslessEstimate
                         ? "Gasless estimate returned"
                         : `Paid fallback fee cap: ${preparedSave.feeCapLabel}`}
                     </p>
-                    <p className="mt-1 text-xs text-gray-400">
+                    <p className="mt-1 text-xs text-[#7a6840]">
                       Built from linea_estimateGas with your wallet as the sender.
                     </p>
                   </div>
@@ -1050,24 +998,24 @@ export default function AddMemoryModal({
                     <button
                       type="button"
                       onClick={confirmEstimatedSave}
-                      className="rounded-lg bg-purple-600 px-4 py-3 text-left text-sm font-medium text-white transition hover:bg-purple-700"
+                      className="rounded-xl border-2 border-[#c9b487] bg-[#e8c674] px-4 py-3 text-left text-sm font-medium text-[#2a1a0a] shadow-[0_2px_0_#b89f6a] transition hover:bg-[#e0bc60] active:translate-y-[1px] active:shadow-none"
                     >
                       <span className="block">
                         {preparedSave.isGaslessEstimate
                           ? "Continue in wallet"
                           : "Use paid fallback"}
                       </span>
-                      <span className="mt-1 block text-xs font-normal text-purple-100">
+                      <span className="mt-1 block text-xs font-normal text-[#5a4020]">
                         Uses Status estimate values now.
                       </span>
                     </button>
                     <button
                       type="button"
                       disabled
-                      className="rounded-lg border border-purple-500/30 bg-slate-800 px-4 py-3 text-left text-sm font-medium text-gray-400"
+                      className="rounded-xl border-2 border-[#c9b487] bg-[#e8dcb4] px-4 py-3 text-left text-sm font-medium text-[#9a8760] opacity-60"
                     >
                       <span className="block">Full gasless submit</span>
-                      <span className="mt-1 block text-xs font-normal text-gray-500">
+                      <span className="mt-1 block text-xs font-normal">
                         Waiting on Hoodi RLN fix.
                       </span>
                     </button>
@@ -1075,21 +1023,21 @@ export default function AddMemoryModal({
                 </div>
               )}
               {submitError && (
-                <p className="mt-2 text-amber-300">{submitError}</p>
+                <p className="mt-2 font-medium text-[#c94a4a]">{submitError}</p>
               )}
             </div>
           )}
         </div>
 
         {/* Footer with Navigation */}
-        <div className="bg-slate-900 border-t border-purple-500/20 px-6 py-4 flex justify-between items-center">
+        <div className="flex items-center justify-between border-t-2 border-[#c9b487] bg-[#efe3c3] px-5 py-3">
           <button
             onClick={() => {
               if (step === "details") setStep("photos");
               else if (step === "location") setStep("details");
               else handleCloseModal();
             }}
-            className="px-4 py-2 text-gray-300 hover:text-gray-100 transition"
+            className="px-4 py-2 text-sm font-medium text-[#7a6840] transition hover:text-[#2a1a0a]"
           >
             ← Back
           </button>
@@ -1098,8 +1046,8 @@ export default function AddMemoryModal({
             {["photos", "details", "location"].map((s) => (
               <div
                 key={s}
-                className={`w-2 h-2 rounded-full transition ${
-                  s === step ? "bg-purple-500" : "bg-slate-500"
+                className={`h-2.5 w-2.5 rounded-full border border-[#c9b487] transition ${
+                  s === step ? "bg-[#e8c674]" : "bg-[#ddd0ac]"
                 }`}
               />
             ))}
@@ -1111,13 +1059,13 @@ export default function AddMemoryModal({
               else if (step === "details" && title) setStep("location");
               else if (step === "location" && locationCoords) prepareSave();
             }}
-            className={`px-6 py-2 rounded-lg font-medium transition ${
+            className={`rounded-xl border-2 px-6 py-2 font-medium shadow-[0_2px_0_#b89f6a] transition active:translate-y-[1px] active:shadow-none ${
               (step === "photos" && photos.length === 0) ||
               (step === "details" && !title) ||
               (step === "location" && !locationCoords) ||
               isSubmitting
-                ? "bg-slate-600 text-gray-500 cursor-not-allowed"
-                : "bg-gradient-to-r from-purple-600 to-purple-700 text-white hover:from-purple-700 hover:to-purple-800"
+                ? "border-[#c9b487] bg-[#e8dcb4] text-[#9a8760] cursor-not-allowed"
+                : "border-[#c9b487] bg-[#e8c674] text-[#2a1a0a] hover:bg-[#e0bc60]"
             }`}
             disabled={
               (step === "photos" && photos.length === 0) ||
@@ -1133,7 +1081,8 @@ export default function AddMemoryModal({
 
       <style jsx>{`
         .drag-active {
-          @apply border-purple-500 bg-purple-500/10;
+          border-color: #a08555 !important;
+          background-color: #e8d9b5 !important;
         }
       `}</style>
     </div>
