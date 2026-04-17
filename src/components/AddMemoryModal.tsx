@@ -14,6 +14,7 @@ import { searchLocations, type LocationResult } from "@/utils/locationSearch";
 
 export type MemoryData = {
   id: number;
+  createdAt: number;
   title: string;
   caption: string;
   date: string;
@@ -723,11 +724,14 @@ export default function AddMemoryModal({
         throw new Error("Location was cleared before the memory was saved");
       }
 
+      const now = Date.now();
+
       const newMemory: MemoryData = {
-        id: Date.now(),
+        id: now,
+        createdAt: now,
         title,
         caption,
-        date: new Date().toLocaleDateString("en-US", {
+        date: new Date(now).toLocaleDateString("en-US", {
           month: "long",
           day: "numeric",
           year: "numeric",
