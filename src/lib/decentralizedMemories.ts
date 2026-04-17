@@ -131,6 +131,7 @@ export function decentralizedMemoryToMapMemory(memory: DecentralizedMemory) {
 
   return {
     id: memory.id,
+    createdAt: memory.createdAt,
     title: memory.metadata.title,
     caption: memory.metadata.description,
     date: createdDate.toLocaleDateString("en-US", {
