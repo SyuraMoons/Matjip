@@ -1,6 +1,7 @@
 import { readContract } from "@wagmi/core";
 import type { Address, Hex } from "viem";
 import { ipfsToGatewayUrl } from "./ipfs";
+import type { KarmaProgressMemory } from "./karmaProgress";
 import type { MemoryMetadata } from "./memory";
 import { wagmiConfig } from "./wallet/config";
 import { memoryRegistryContract } from "./wallet/memoryRegistry";
@@ -78,6 +79,40 @@ export async function loadDecentralizedMemories(options?: {
   return memories
     .filter((memory): memory is DecentralizedMemory => memory !== null)
     .sort((a, b) => a.createdAt - b.createdAt);
+}
+
+export async function loadKarmaProgressMemories(): Promise<
+  KarmaProgressMemory[]
+> {
+  const memoryCount = await readContract(wagmiConfig, {
+    ...memoryRegistryContract,
+    functionName: "memoryCount",
+  });
+  const ids = Array.from({ length: Number(memoryCount) }, (_, index) => index);
+
+  return Promise.all(
+    ids.map(async (id) => {
+      const [chainMemory, rewardClaimed] = await Promise.all([
+        readContract(wagmiConfig, {
+          ...memoryRegistryContract,
+          functionName: "getMemory",
+          args: [BigInt(id)],
+        }) as Promise<ContractMemory>,
+        readContract(wagmiConfig, {
+          ...memoryRegistryContract,
+          functionName: "isRewardClaimed",
+          args: [BigInt(id)],
+        }) as Promise<boolean>,
+      ]);
+
+      return {
+        id,
+        lat: Number(chainMemory.latE6) / 1_000_000,
+        lng: Number(chainMemory.lngE6) / 1_000_000,
+        rewardClaimed,
+      };
+    })
+  );
 }
 
 export function decentralizedMemoryToMapMemory(memory: DecentralizedMemory) {

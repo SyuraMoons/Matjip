@@ -5,10 +5,12 @@ export const KARMA_ADDRESS =
 export const KARMA_TIERS_ADDRESS =
   process.env.NEXT_PUBLIC_KARMA_TIERS_ADDRESS ||
   "0xb8039632e089dcefa6bbb1590948926b2463b691";
+export const MOCK_KARMA_ADDRESS = process.env.NEXT_PUBLIC_MOCK_KARMA_ADDRESS;
 
 const BALANCE_OF_SELECTOR = "0x70a08231";
 const GET_TIER_ID_BY_KARMA_BALANCE_SELECTOR = "0xa04f7fc7";
 const GET_TIER_BY_ID_SELECTOR = "0xc7a41671";
+const KARMA_UNIT = BigInt(10) ** BigInt(18);
 
 type JsonRpcResponse = {
   result?: string;
@@ -32,6 +34,7 @@ export type KarmaInfo = {
   tierName: string;
   txPerEpoch: number;
   gaslessEligible: boolean;
+  source: "official" | "matjip";
 };
 
 function rpcUrl() {
@@ -116,6 +119,43 @@ function decodeTier(tierResult: string) {
   };
 }
 
+function mockTierForBalance(karmaBalance: bigint) {
+  const wholeKarma = karmaBalance / KARMA_UNIT;
+
+  if (wholeKarma >= BigInt(10_000_000)) {
+    return { tierId: 9, tierName: "Legendary", txPerEpoch: 480_000 };
+  }
+  if (wholeKarma >= BigInt(5_000_000)) {
+    return { tierId: 8, tierName: "S-Tier", txPerEpoch: 240_000 };
+  }
+  if (wholeKarma >= BigInt(500_000)) {
+    return { tierId: 7, tierName: "High-Throughput", txPerEpoch: 108_000 };
+  }
+  if (wholeKarma >= BigInt(100_000)) {
+    return { tierId: 6, tierName: "Pro User", txPerEpoch: 10_080 };
+  }
+  if (wholeKarma >= BigInt(20_000)) {
+    return { tierId: 5, tierName: "Power User", txPerEpoch: 960 };
+  }
+  if (wholeKarma >= BigInt(5_000)) {
+    return { tierId: 4, tierName: "Regular", txPerEpoch: 480 };
+  }
+  if (wholeKarma >= BigInt(500)) {
+    return { tierId: 3, tierName: "Active", txPerEpoch: 96 };
+  }
+  if (wholeKarma >= BigInt(50)) {
+    return { tierId: 2, tierName: "Basic", txPerEpoch: 15 };
+  }
+  if (wholeKarma >= BigInt(2)) {
+    return { tierId: 1, tierName: "Newbie", txPerEpoch: 5 };
+  }
+  if (wholeKarma >= BigInt(1)) {
+    return { tierId: 0, tierName: "Entry", txPerEpoch: 1 };
+  }
+
+  return { tierId: -1, tierName: "None", txPerEpoch: 0 };
+}
+
 async function ethCall(to: string, data: string, label: string) {
   const response = await fetch(rpcUrl(), {
     method: "POST",
@@ -154,6 +194,24 @@ export async function getKarmaInfo(address: string): Promise<KarmaInfo> {
     throw new Error("Invalid wallet address");
   }
 
+  if (MOCK_KARMA_ADDRESS) {
+    const balanceResult = await ethCall(
+      MOCK_KARMA_ADDRESS,
+      `${BALANCE_OF_SELECTOR}${encodeAddress(normalizedAddress)}`,
+      "MockKarma.balanceOf"
+    );
+    const karmaBalance = hexToBigInt(balanceResult, "MockKarma.balanceOf");
+    const tier = mockTierForBalance(karmaBalance);
+
+    return {
+      address: normalizedAddress,
+      karmaBalance: karmaBalance.toString(),
+      ...tier,
+      gaslessEligible: karmaBalance > BigInt(0),
+      source: "matjip",
+    };
+  }
+
   const balanceResult = await ethCall(
     KARMA_ADDRESS,
     `${BALANCE_OF_SELECTOR}${encodeAddress(normalizedAddress)}`,
@@ -184,5 +242,6 @@ export async function getKarmaInfo(address: string): Promise<KarmaInfo> {
     tierName,
     txPerEpoch,
     gaslessEligible: karmaBalance > BigInt(0),
+    source: "official",
   };
 }

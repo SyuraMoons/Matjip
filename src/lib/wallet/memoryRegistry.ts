@@ -47,6 +47,13 @@ export const memoryRegistryAbi = [
     ],
   },
   {
+    type: "function",
+    name: "isRewardClaimed",
+    stateMutability: "view",
+    inputs: [{ name: "memoryId", type: "uint256" }],
+    outputs: [{ name: "", type: "bool" }],
+  },
+  {
     type: "event",
     name: "MemoryCreated",
     inputs: [
@@ -57,6 +64,16 @@ export const memoryRegistryAbi = [
       { name: "latE6", type: "int32", indexed: false },
       { name: "lngE6", type: "int32", indexed: false },
       { name: "createdAt", type: "uint64", indexed: false },
+    ],
+  },
+  {
+    type: "event",
+    name: "KarmaRewarded",
+    inputs: [
+      { name: "user", type: "address", indexed: true },
+      { name: "amount", type: "uint256", indexed: false },
+      { name: "triggerMemoryId", type: "uint256", indexed: true },
+      { name: "claimedMemoryCount", type: "uint256", indexed: false },
     ],
   },
 ] as const;
