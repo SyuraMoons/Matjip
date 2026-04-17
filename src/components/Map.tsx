@@ -542,6 +542,29 @@ export default function Map({
     });
   };
 
+  const upsertMemory = (currentMemories: MemoryData[], memory: MemoryData) => {
+    const existingIndex = currentMemories.findIndex((candidate) => {
+      if (memory.txHash && candidate.txHash === memory.txHash) return true;
+      if (
+        memory.metadataCid &&
+        candidate.metadataCid &&
+        candidate.metadataCid === memory.metadataCid
+      ) {
+        return true;
+      }
+
+      return candidate.id === memory.id;
+    });
+
+    if (existingIndex === -1) {
+      return [...currentMemories, memory];
+    }
+
+    const nextMemories = [...currentMemories];
+    nextMemories[existingIndex] = memory;
+    return nextMemories;
+  };
+
   // Set up event listener for read-more buttons
   useEffect(() => {
     const handleReadMoreClick = (e: Event) => {
@@ -993,7 +1016,7 @@ export default function Map({
     publishRewardProgress(calculateKarmaRewardProgress(progressMemories));
   }, [publishRewardProgress]);
 
-  const reloadMemories = async (poster: Address) => {
+  const reloadMemories = async (poster: Address, preserveMemory?: MemoryData) => {
     setIsLoadingMemories(true);
     setMemoryLoadError("");
 
@@ -1002,7 +1025,12 @@ export default function Map({
         loadDecentralizedMemories({ poster }),
         reloadRewardProgress(),
       ]);
-      setMemories(loaded.map(decentralizedMemoryToMapMemory));
+      const loadedMemories = loaded.map(decentralizedMemoryToMapMemory);
+      setMemories(
+        preserveMemory
+          ? upsertMemory(loadedMemories, preserveMemory)
+          : loadedMemories
+      );
     } catch (error) {
       setMemoryLoadError(
         error instanceof Error ? error.message : "Unable to load memories"
@@ -1147,10 +1175,14 @@ export default function Map({
   }, [memories]);
 
   const handleSaveMemory = async (memory: MemoryData) => {
-    setMemories((prev) => [...prev, memory]);
+    setMemories((prev) => upsertMemory(prev, memory));
+    mapInstanceRef.current?.flyTo([memory.lat, memory.lng], 15, {
+      animate: true,
+      duration: 0.8,
+    });
 
     if (!address) return;
-    await reloadMemories(address as Address);
+    await reloadMemories(address as Address, memory);
   };
 
   const showLoadingOverlay = isLocating || isLoadingMemories;

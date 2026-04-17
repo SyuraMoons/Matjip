@@ -61,7 +61,16 @@ export async function loadDecentralizedMemories(options?: {
         return null;
       }
 
-      const metadata = await fetchMemoryMetadata(chainMemory.metadataCid);
+      let metadata: MemoryMetadata;
+      try {
+        metadata = await fetchMemoryMetadata(chainMemory.metadataCid);
+      } catch (error) {
+        console.warn(
+          `Skipping memory ${id}; metadata is not available yet`,
+          error
+        );
+        return null;
+      }
 
       return {
         id,
