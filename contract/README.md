@@ -54,10 +54,10 @@ experience while third-party app reward minting is not available. The deploy
 script deploys `MockKarma`, then `MemoryRegistry`, then sets the registry as
 the only minter.
 
-When `createMemory` creates a connected group of 5 unclaimed memories within a
-250m chain, `MemoryRegistry` mints 3 Matjip Karma to the wallet that added the
-triggering memory. Claimed memories can still connect future groups, but each
-memory only counts toward one reward.
+When `createMemory` creates a connected group of 5 unclaimed nearby memories,
+`MemoryRegistry` mints 3 Matjip Karma to the wallet that added the triggering
+memory. The demo connection threshold is approximately 400m. Claimed memories
+can still connect future groups, but each memory only counts toward one reward.
 
 Set both frontend addresses after deployment:
 
@@ -68,6 +68,24 @@ NEXT_PUBLIC_MEMORY_REGISTRY_ADDRESS=<deployed_contract_address>
 
 Matjip Karma is not official Status Karma and does not control real sequencer
 gasless eligibility.
+
+## Deployed Contracts
+
+Latest Status Hoodi deployment:
+
+```text
+MockKarma: 0x39eee569c1f2c28f86e79d38b3ed350488bac908
+MemoryRegistry: 0x33e8142b8951d3ebaf078a4245e8f107cc8024da
+```
+
+Latest deployment source:
+
+```text
+broadcast/MatjipMemoryMap.s.sol/374/run-latest.json
+```
+
+Redeploying creates a new `MemoryRegistry`; old memories do not automatically
+migrate to the new registry.
 
 ## Status Hoodi
 
@@ -95,7 +113,7 @@ After deployment, set these in the web app:
 
 ```shell
 NEXT_PUBLIC_MOCK_KARMA_ADDRESS=<deployed_mock_karma_address>
-NEXT_PUBLIC_MEMORY_REGISTRY_ADDRESS=<deployed_contract_address>
+NEXT_PUBLIC_MEMORY_REGISTRY_ADDRESS=<deployed_memory_registry_address>
 ```
 
 ## Commands
