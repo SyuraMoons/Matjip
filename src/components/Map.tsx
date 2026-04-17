@@ -80,12 +80,50 @@ function buildChronologicalPairs(
   return pairs;
 }
 
-// Fallback route: simple straight line between two points (not a real road path)
-function buildFallbackRoutePoints(
+// Fetch real route geometry from OSRM API following actual street network
+async function fetchRoutePoints(
   a: MemoryData,
   b: MemoryData
-): [number, number][] {
-  return [[a.lat, a.lng], [b.lat, b.lng]];
+): Promise<[number, number][]> {
+  try {
+    const params = new URLSearchParams({
+      startLat: String(a.lat),
+      startLng: String(a.lng),
+      endLat: String(b.lat),
+      endLng: String(b.lng),
+    });
+
+    const response = await fetch(`/api/routes/path?${params.toString()}`, {
+      cache: "no-store",
+    });
+
+    const data = await response.json();
+
+    if (
+      !response.ok ||
+      !Array.isArray(data?.points) ||
+      data.points.length < 2
+    ) {
+      // Honest fallback if route fails
+      return [
+        [a.lat, a.lng],
+        [b.lat, b.lng],
+      ];
+    }
+
+    return data.points as [number, number][];
+  } catch (error) {
+    console.error("fetchRoutePoints failed:", error);
+    return [
+      [a.lat, a.lng],
+      [b.lat, b.lng],
+    ];
+  }
+}
+
+// Create stable cache key for route pair
+function getRouteKey(a: MemoryData, b: MemoryData): string {
+  return `${a.id}__${b.id}`;
 }
 
 // Build SVG corridor around a polyline
@@ -460,6 +498,7 @@ export default function Map({
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isLocating, setIsLocating] = useState(true);
   const memoriesRef = useRef<MemoryData[]>([]);
+  const routePointsRef = useRef<Record<string, [number, number][]>>({});
 
   // Keep memoriesRef in sync with memories state
   useEffect(() => {
@@ -772,13 +811,17 @@ export default function Map({
         subpaths.push(createCircleSubpath(map, memory.lat, memory.lng, radius));
       });
 
-      // Add route corridors between chronological nearby pairs
+      // Add route corridors between chronological nearby pairs using cached route geometry
       const pairs = buildChronologicalPairs(map, memoriesRef.current, 400);
       pairs.forEach(([a, b]) => {
-        const routePoints = buildFallbackRoutePoints(a, b);
-        const corridorPath = routeCorridorToSubpath(map, routePoints, 50);
-        if (corridorPath) {
-          subpaths.push(corridorPath);
+        const key = getRouteKey(a, b);
+        const points = routePointsRef.current[key];
+
+        if (points && points.length >= 2) {
+          const corridorPath = routeCorridorToSubpath(map, points, 35);
+          if (corridorPath) {
+            subpaths.push(corridorPath);
+          }
         }
       });
 
@@ -917,7 +960,86 @@ export default function Map({
     };
   }, []);
 
-  // Update markers and mask when memories change
+  // Fetch real route geometry when memories change
+  useEffect(() => {
+    if (!mapInstanceRef.current) return;
+
+    let cancelled = false;
+
+    async function loadRoutes() {
+      const map = mapInstanceRef.current;
+      if (!map) return;
+
+      const pairs = buildChronologicalPairs(map, memories, 400);
+      const nextCache: Record<string, [number, number][]> = {};
+
+      for (const [a, b] of pairs) {
+        const key = getRouteKey(a, b);
+        const existing = routePointsRef.current[key];
+
+        // Reuse cached route if available
+        if (existing) {
+          nextCache[key] = existing;
+          continue;
+        }
+
+        // Fetch real route geometry from OSRM
+        const points = await fetchRoutePoints(a, b);
+        if (cancelled) return;
+        nextCache[key] = points;
+      }
+
+      if (!cancelled) {
+        routePointsRef.current = nextCache;
+
+        // Update mask with new route geometry
+        requestAnimationFrame(() => {
+          const pane = streetsPaneRef.current;
+          const mapNow = mapInstanceRef.current;
+          if (!pane || !mapNow) return;
+
+          const subpaths: string[] = [];
+
+          const loc = userLocationRef.current;
+          if (loc) {
+            subpaths.push(createCircleSubpath(mapNow, loc.lat, loc.lng, 100));
+          }
+
+          memoriesRef.current.forEach((memory) => {
+            const radius = getPlaceScaleRadius(memory);
+            subpaths.push(
+              createCircleSubpath(mapNow, memory.lat, memory.lng, radius)
+            );
+          });
+
+          const routePairs = buildChronologicalPairs(mapNow, memoriesRef.current, 400);
+          routePairs.forEach(([a, b]) => {
+            const key = getRouteKey(a, b);
+            const points = routePointsRef.current[key];
+            if (points && points.length >= 2) {
+              const corridorPath = routeCorridorToSubpath(mapNow, points, 35);
+              if (corridorPath) {
+                subpaths.push(corridorPath);
+              }
+            }
+          });
+
+          pane.style.clipPath =
+            subpaths.length > 0
+              ? `path('${subpaths.join(" ')}`
+              : "circle(0px at 0px 0px)";
+        });
+      }
+    }
+
+    loadRoutes();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [memories]);
+
+  // Update markers when memories change
   useEffect(() => {
     if (!mapInstanceRef.current) return;
 
@@ -932,59 +1054,6 @@ export default function Map({
 
     // Add all current memories as markers
     memories.forEach((memory) => addMemoryMarker(memory, map));
-
-    // Trigger mask update on next frame
-    requestAnimationFrame(() => {
-      const pane = streetsPaneRef.current;
-      if (!pane || !mapInstanceRef.current) return;
-
-      const subpaths: string[] = [];
-
-      // Add user location circle
-      const loc = userLocationRef.current;
-      if (loc) {
-        subpaths.push(
-          createCircleSubpath(mapInstanceRef.current, loc.lat, loc.lng, 100)
-        );
-      }
-
-      // Add memory circles with place-scale radii
-      memoriesRef.current.forEach((memory) => {
-        const radius = getPlaceScaleRadius(memory);
-        subpaths.push(
-          createCircleSubpath(
-            mapInstanceRef.current!,
-            memory.lat,
-            memory.lng,
-            radius
-          )
-        );
-      });
-
-      // Add route corridors between chronological nearby pairs
-      const pairs = buildChronologicalPairs(
-        mapInstanceRef.current,
-        memoriesRef.current,
-        400
-      );
-      pairs.forEach(([a, b]) => {
-        const routePoints = buildFallbackRoutePoints(a, b);
-        const corridorPath = routeCorridorToSubpath(
-          mapInstanceRef.current!,
-          routePoints,
-          50
-        );
-        if (corridorPath) {
-          subpaths.push(corridorPath);
-        }
-      });
-
-      if (subpaths.length === 0) {
-        pane.style.clipPath = "circle(0px at 0px 0px)";
-      } else {
-        pane.style.clipPath = `path('${subpaths.join(" ")}')`;
-      }
-    });
   }, [memories]);
 
   const handleSaveMemory = (memory: MemoryData) => {
