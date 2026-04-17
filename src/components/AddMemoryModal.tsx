@@ -47,6 +47,8 @@ type UploadedMemory = {
   };
 };
 
+type UploadResponsePayload = (UploadedMemory & { error?: string }) | { error: string };
+
 type AddMemoryModalProps = {
   isOpen: boolean;
   onClose: () => void;
@@ -79,6 +81,16 @@ type PreparedMemorySave = {
   isGaslessEstimate: boolean;
 };
 
+const VERCEL_FUNCTION_BODY_LIMIT_BYTES = 4.5 * 1024 * 1024;
+const CLIENT_UPLOAD_BODY_LIMIT_BYTES = 4 * 1024 * 1024;
+const IMAGE_COMPRESSION_PASSES = [
+  { maxSize: 1600, quality: 0.82 },
+  { maxSize: 1280, quality: 0.72 },
+  { maxSize: 1024, quality: 0.62 },
+] as const;
+
+type ImageCompressionPass = (typeof IMAGE_COMPRESSION_PASSES)[number];
+
 function formatFeeCap(wei: bigint) {
   if (wei === BigInt(0)) {
     return "0 ETH";
@@ -87,6 +99,105 @@ function formatFeeCap(wei: bigint) {
   return `${Number(formatEther(wei)).toLocaleString(undefined, {
     maximumSignificantDigits: 4,
   })} ETH`;
+}
+
+function safeUploadFileName(fileName: string) {
+  const stem = fileName.replace(/\.[^.]+$/, "");
+  return `${stem.replace(/[^a-zA-Z0-9_-]/g, "-").slice(0, 60) || "memory"}.jpg`;
+}
+
+function loadImageElement(file: File) {
+  return new Promise<HTMLImageElement>((resolve, reject) => {
+    const image = new Image();
+    const objectUrl = URL.createObjectURL(file);
+
+    image.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(image);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error(`Unable to read ${file.name || "image"}`));
+    };
+    image.src = objectUrl;
+  });
+}
+
+async function compressImageForUpload(
+  file: File,
+  compression: ImageCompressionPass
+) {
+  if (!file.type.startsWith("image/")) {
+    throw new Error(`${file.name || "File"} is not an image`);
+  }
+
+  const image = await loadImageElement(file);
+  const scale = Math.min(
+    1,
+    compression.maxSize / Math.max(image.naturalWidth, image.naturalHeight)
+  );
+  const width = Math.max(1, Math.round(image.naturalWidth * scale));
+  const height = Math.max(1, Math.round(image.naturalHeight * scale));
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const context = canvas.getContext("2d");
+  if (!context) {
+    throw new Error("Image compression is unavailable in this browser");
+  }
+
+  context.drawImage(image, 0, 0, width, height);
+
+  const blob = await new Promise<Blob | null>((resolve) => {
+    canvas.toBlob(resolve, "image/jpeg", compression.quality);
+  });
+
+  if (!blob) {
+    throw new Error(`Unable to compress ${file.name || "image"}`);
+  }
+
+  return new File([blob], safeUploadFileName(file.name), {
+    type: "image/jpeg",
+    lastModified: Date.now(),
+  });
+}
+
+async function preparePhotosForUpload(files: File[]) {
+  for (const compression of IMAGE_COMPRESSION_PASSES) {
+    const compressed = await Promise.all(
+      files.map((file) => compressImageForUpload(file, compression))
+    );
+    const totalBytes = compressed.reduce((sum, file) => sum + file.size, 0);
+
+    if (totalBytes <= CLIENT_UPLOAD_BODY_LIMIT_BYTES) {
+      return compressed;
+    }
+  }
+
+  throw new Error(
+    `Photos are too large for Vercel's ${(
+      VERCEL_FUNCTION_BODY_LIMIT_BYTES / 1024 / 1024
+    ).toFixed(1)}MB upload limit. Remove some photos or choose smaller images.`
+  );
+}
+
+async function readUploadResponse(
+  response: Response
+): Promise<UploadResponsePayload> {
+  const contentType = response.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    return (await response.json()) as UploadedMemory & { error?: string };
+  }
+
+  const text = await response.text();
+  return {
+    error:
+      response.status === 413
+        ? "Photos are too large for Vercel. Remove some photos or choose smaller images."
+        : text || `Upload failed with HTTP ${response.status}`,
+  };
 }
 
 export default function AddMemoryModal({
@@ -471,22 +582,27 @@ export default function AddMemoryModal({
     }
 
     setSubmitStep("uploading");
+    const uploadFiles = await preparePhotosForUpload(photoFiles);
     const formData = new FormData();
     formData.append("title", title);
     formData.append("description", caption);
     formData.append("locationName", manualLocation);
     formData.append("lat", String(locationCoords.lat));
     formData.append("lng", String(locationCoords.lng));
-    photoFiles.forEach((file) => formData.append("photos", file));
+    uploadFiles.forEach((file) => formData.append("photos", file));
 
     const response = await fetch("/api/memories/upload", {
       method: "POST",
       body: formData,
     });
-    const payload = (await response.json()) as UploadedMemory & { error?: string };
+    const payload = await readUploadResponse(response);
 
-    if (!response.ok) {
+    if (!response.ok || payload.error) {
       throw new Error(payload.error || "Unable to upload memory");
+    }
+
+    if (!("metadataCid" in payload)) {
+      throw new Error("Upload response was missing memory metadata");
     }
 
     setUploadedMemory(payload);
