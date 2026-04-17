@@ -29,9 +29,23 @@ export type MemoryData = {
 };
 
 type KarmaInfo = {
+  address: string;
   karmaBalance: string;
+  tierId: number;
+  tierName: string;
+  txPerEpoch: number;
   gaslessEligible: boolean;
   source: "official" | "matjip";
+};
+
+type KarmaSummary = {
+  address: string;
+  official?: KarmaInfo;
+  matjip?: KarmaInfo;
+  errors?: {
+    official?: string;
+    matjip?: string;
+  };
 };
 
 type UploadedMemory = {
@@ -552,17 +566,33 @@ export default function AddMemoryModal({
     setSubmitStep("karma");
     try {
       const response = await fetch(`/api/karma/${address}`);
-      const karmaInfo = (await response.json()) as KarmaInfo & { error?: string };
+      const karmaSummary = (await response.json()) as KarmaSummary & {
+        error?: string;
+      };
 
       if (!response.ok) {
-        throw new Error(karmaInfo.error || "Unable to check Karma");
+        throw new Error(karmaSummary.error || "Unable to check Karma");
       }
 
-      if (!karmaInfo.gaslessEligible || BigInt(karmaInfo.karmaBalance) <= BigInt(0)) {
+      const officialBalance = karmaSummary.official
+        ? BigInt(karmaSummary.official.karmaBalance)
+        : BigInt(0);
+      const matjipBalance = karmaSummary.matjip
+        ? BigInt(karmaSummary.matjip.karmaBalance)
+        : BigInt(0);
+      const hasOfficialKarma =
+        Boolean(karmaSummary.official?.gaslessEligible) &&
+        officialBalance > BigInt(0);
+
+      if (!hasOfficialKarma) {
         setSubmitNotice(
-          karmaInfo.source === "matjip"
-            ? "No Matjip Karma yet. Add connected memories to earn demo Karma."
-            : "No official Status Karma found yet. The wallet can still submit with the current Hoodi paid fallback."
+          matjipBalance > BigInt(0)
+            ? "Demo Matjip Karma found, but real Status Karma controls official gasless eligibility. The wallet can still use the current Hoodi paid fallback."
+            : "No real Status Karma found yet. Demo Matjip Karma is earned when 5 connected memories reveal a larger area."
+        );
+      } else if (karmaSummary.errors?.matjip) {
+        setSubmitNotice(
+          "Real Status Karma found. Demo Matjip Karma is unavailable right now, so connected rewards may refresh later."
         );
       }
     } catch (error) {
