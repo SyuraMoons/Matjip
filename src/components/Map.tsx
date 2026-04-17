@@ -15,64 +15,156 @@ L.Icon.Default.mergeOptions({
 });
 
 // ============================================================================
-// Memory Node Types and Helper Functions
+// Place Scale Radius and Route Helpers
 // ============================================================================
 
-type MemoryNode = MemoryData & {
-  baseRadius: number;
-  currentRadius: number;
-};
+function getPlaceScaleRadius(memory: MemoryData): number {
+  const text = `${memory.title} ${memory.location} ${memory.caption}`.toLowerCase();
 
-function getDistanceMeters(
-  map: L.Map,
-  a: { lat: number; lng: number },
-  b: { lat: number; lng: number }
-): number {
-  return map.distance([a.lat, a.lng], [b.lat, b.lng]);
+  const largeKeywords = [
+    "park",
+    "mountain",
+    "palace",
+    "castle",
+    "campus",
+    "forest",
+    "garden",
+  ];
+  const mediumKeywords = [
+    "museum",
+    "temple",
+    "mall",
+    "station",
+    "landmark",
+    "market",
+  ];
+  const smallKeywords = [
+    "cafe",
+    "coffee",
+    "restaurant",
+    "shop",
+    "store",
+    "bakery",
+    "bar",
+  ];
+
+  if (largeKeywords.some((k) => text.includes(k))) return 220;
+  if (mediumKeywords.some((k) => text.includes(k))) return 120;
+  if (smallKeywords.some((k) => text.includes(k))) return 60;
+
+  return 100;
 }
 
-function circlesTouch(
-  map: L.Map,
-  a: MemoryNode,
-  b: MemoryNode
-): boolean {
-  const distance = getDistanceMeters(map, a, b);
-  return distance <= a.currentRadius + b.currentRadius;
+function sortMemoriesChronologically(memories: MemoryData[]): MemoryData[] {
+  return [...memories].sort((a, b) => a.id - b.id);
 }
 
-function computeConnectedGroups(
+function buildChronologicalPairs(
   map: L.Map,
-  nodes: MemoryNode[]
-): MemoryNode[][] {
-  const visited = new Set<number>();
-  const groups: MemoryNode[][] = [];
+  memories: MemoryData[],
+  thresholdMeters = 400
+): Array<[MemoryData, MemoryData]> {
+  const sorted = sortMemoriesChronologically(memories);
+  const pairs: Array<[MemoryData, MemoryData]> = [];
 
-  for (let i = 0; i < nodes.length; i++) {
-    if (visited.has(nodes[i].id)) continue;
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const a = sorted[i];
+    const b = sorted[i + 1];
+    const distance = map.distance([a.lat, a.lng], [b.lat, b.lng]);
 
-    const stack = [nodes[i]];
-    const group: MemoryNode[] = [];
-    visited.add(nodes[i].id);
-
-    while (stack.length > 0) {
-      const current = stack.pop()!;
-      group.push(current);
-
-      for (let j = 0; j < nodes.length; j++) {
-        const next = nodes[j];
-        if (visited.has(next.id)) continue;
-
-        if (circlesTouch(map, current, next)) {
-          visited.add(next.id);
-          stack.push(next);
-        }
-      }
+    if (distance <= thresholdMeters) {
+      pairs.push([a, b]);
     }
-
-    groups.push(group);
   }
 
-  return groups;
+  return pairs;
+}
+
+// Fallback route: simple straight line between two points (not a real road path)
+function buildFallbackRoutePoints(
+  a: MemoryData,
+  b: MemoryData
+): [number, number][] {
+  return [[a.lat, a.lng], [b.lat, b.lng]];
+}
+
+// Build SVG corridor around a polyline
+function routeCorridorToSubpath(
+  map: L.Map,
+  points: [number, number][],
+  corridorWidthMeters = 50
+): string {
+  if (points.length < 2) return "";
+
+  const layerPoints = points.map((p) =>
+    map.latLngToLayerPoint(L.latLng(p[0], p[1]))
+  );
+
+  const corridorLeft: L.Point[] = [];
+  const corridorRight: L.Point[] = [];
+
+  for (let i = 0; i < layerPoints.length; i++) {
+    const curr = layerPoints[i];
+    const prev = i > 0 ? layerPoints[i - 1] : curr;
+    const next = i < layerPoints.length - 1 ? layerPoints[i + 1] : curr;
+
+    let dx: number, dy: number;
+    if (i === 0) {
+      dx = next.x - curr.x;
+      dy = next.y - curr.y;
+    } else if (i === layerPoints.length - 1) {
+      dx = curr.x - prev.x;
+      dy = curr.y - prev.y;
+    } else {
+      const v1x = curr.x - prev.x;
+      const v1y = curr.y - prev.y;
+      const v2x = next.x - curr.x;
+      const v2y = next.y - curr.y;
+      dx = v1x + v2x;
+      dy = v1y + v2y;
+    }
+
+    const len = Math.sqrt(dx * dx + dy * dy);
+    if (len > 0) {
+      dx /= len;
+      dy /= len;
+    }
+
+    const lat = points[i][0];
+    const metersPerPixel =
+      (40075016.686 * Math.abs(Math.cos((lat * Math.PI) / 180))) /
+      Math.pow(2, map.getZoom() + 8);
+    const pixelWidth = corridorWidthMeters / metersPerPixel;
+
+    corridorLeft.push(L.point(curr.x - dy * pixelWidth, curr.y + dx * pixelWidth));
+    corridorRight.push(L.point(curr.x + dy * pixelWidth, curr.y - dx * pixelWidth));
+  }
+
+  let pathStr = `M ${corridorLeft[0].x} ${corridorLeft[0].y}`;
+  for (let i = 1; i < corridorLeft.length; i++) {
+    pathStr += ` L ${corridorLeft[i].x} ${corridorLeft[i].y}`;
+  }
+  for (let i = corridorRight.length - 1; i >= 0; i--) {
+    pathStr += ` L ${corridorRight[i].x} ${corridorRight[i].y}`;
+  }
+  pathStr += " Z";
+
+  return pathStr;
+}
+
+// Circle subpath for a memory pin with place-scale radius
+function createCircleSubpath(
+  map: L.Map,
+  lat: number,
+  lng: number,
+  radiusMeters: number
+): string {
+  const pt = map.latLngToLayerPoint(L.latLng(lat, lng));
+  const metersPerPixel =
+    (40075016.686 * Math.abs(Math.cos((lat * Math.PI) / 180))) /
+    Math.pow(2, map.getZoom() + 8);
+  const r = radiusMeters / metersPerPixel;
+  return `M ${pt.x + r} ${pt.y} a ${r} ${r} 0 1 0 ${-2 * r} 0 a ${r} ${r} 0 1 0 ${2 * r} 0 Z`;
 }
 
 function createMemoryIcon() {
@@ -368,7 +460,6 @@ export default function Map({
   const [isDetailOpen, setIsDetailOpen] = useState(false);
   const [isLocating, setIsLocating] = useState(true);
   const memoriesRef = useRef<MemoryData[]>([]);
-  const memoryNodesRef = useRef<MemoryNode[]>([]);
 
   // Keep memoriesRef in sync with memories state
   useEffect(() => {
@@ -660,36 +751,37 @@ export default function Map({
     new LocateControl({ position: "bottomright" }).addTo(map);
 
     // --- Visited-area system using clipPath masks ---
-    const BASE_RADIUS_METERS = 100;
     let updateFrameId: number | null = null;
-
-    // Clip the streets pane to circles at the user's location and every
-    // memory, so the labelled Voyager tiles are only visible inside
-    // each visited radius. Uses an SVG path() so multiple circles can be
-    // combined in a single clip-path.
-    function circleSubpath(
-      lat: number,
-      lng: number,
-      radiusMeters: number
-    ): string {
-      const pt = map.latLngToLayerPoint(L.latLng(lat, lng));
-      const metersPerPixel =
-        (40075016.686 * Math.abs(Math.cos((lat * Math.PI) / 180))) /
-        Math.pow(2, map.getZoom() + 8);
-      const r = radiusMeters / metersPerPixel;
-      return `M ${pt.x + r} ${pt.y} a ${r} ${r} 0 1 0 ${-2 * r} 0 a ${r} ${r} 0 1 0 ${2 * r} 0 Z`;
-    }
 
     function updateStreetsMask() {
       const pane = streetsPaneRef.current;
-      if (!pane) return;
+      if (!pane || !mapInstanceRef.current) return;
+
+      const map = mapInstanceRef.current;
       const subpaths: string[] = [];
+
+      // Add user location circle (100m base)
       const loc = userLocationRef.current;
-      if (loc) subpaths.push(circleSubpath(loc.lat, loc.lng, BASE_RADIUS_METERS));
-      // Use memory nodes with their current radii
-      memoryNodesRef.current.forEach((node) =>
-        subpaths.push(circleSubpath(node.lat, node.lng, node.currentRadius))
-      );
+      if (loc) {
+        subpaths.push(createCircleSubpath(map, loc.lat, loc.lng, 100));
+      }
+
+      // Add memory circles with place-scale radii
+      memoriesRef.current.forEach((memory) => {
+        const radius = getPlaceScaleRadius(memory);
+        subpaths.push(createCircleSubpath(map, memory.lat, memory.lng, radius));
+      });
+
+      // Add route corridors between chronological nearby pairs
+      const pairs = buildChronologicalPairs(map, memoriesRef.current, 400);
+      pairs.forEach(([a, b]) => {
+        const routePoints = buildFallbackRoutePoints(a, b);
+        const corridorPath = routeCorridorToSubpath(map, routePoints, 50);
+        if (corridorPath) {
+          subpaths.push(corridorPath);
+        }
+      });
+
       if (subpaths.length === 0) {
         pane.style.clipPath = "circle(0px at 0px 0px)";
         return;
@@ -825,7 +917,7 @@ export default function Map({
     };
   }, []);
 
-  // Update markers and compute connected groups when memories change
+  // Update markers and mask when memories change
   useEffect(() => {
     if (!mapInstanceRef.current) return;
 
@@ -841,62 +933,50 @@ export default function Map({
     // Add all current memories as markers
     memories.forEach((memory) => addMemoryMarker(memory, map));
 
-    // Convert memories to nodes with base radius
-    const BASE_RADIUS = 100;
-    const nodes: MemoryNode[] = memories.map((memory) => ({
-      ...memory,
-      baseRadius: BASE_RADIUS,
-      currentRadius: BASE_RADIUS,
-    }));
-
-    // Compute connected groups using base radius
-    const groups = computeConnectedGroups(map, nodes);
-
-    // Apply grown radius to each node based on group size
-    for (const group of groups) {
-      const grownRadius = BASE_RADIUS * Math.sqrt(group.length);
-      for (const node of group) {
-        node.currentRadius = grownRadius;
-      }
-    }
-
-    // Update the ref for use in rendering
-    memoryNodesRef.current = nodes;
-
-    // Trigger a mask update with new radii (the updateStreetsMask function
-    // will read from memoryNodesRef.current which we just updated)
+    // Trigger mask update on next frame
     requestAnimationFrame(() => {
-      // Manually build and apply the updated mask since updateStreetsMask
-      // is defined in the map setup closure
       const pane = streetsPaneRef.current;
-      if (!pane) return;
+      if (!pane || !mapInstanceRef.current) return;
 
       const subpaths: string[] = [];
-      const loc = userLocationRef.current;
 
-      if (loc && mapInstanceRef.current) {
-        const mapInst = mapInstanceRef.current;
-        const pt = mapInst.latLngToLayerPoint(L.latLng(loc.lat, loc.lng));
-        const metersPerPixel =
-          (40075016.686 * Math.abs(Math.cos((loc.lat * Math.PI) / 180))) /
-          Math.pow(2, mapInst.getZoom() + 8);
-        const r = 100 / metersPerPixel;
+      // Add user location circle
+      const loc = userLocationRef.current;
+      if (loc) {
         subpaths.push(
-          `M ${pt.x + r} ${pt.y} a ${r} ${r} 0 1 0 ${-2 * r} 0 a ${r} ${r} 0 1 0 ${2 * r} 0 Z`
+          createCircleSubpath(mapInstanceRef.current, loc.lat, loc.lng, 100)
         );
       }
 
-      memoryNodesRef.current.forEach((node) => {
-        if (!mapInstanceRef.current) return;
-        const mapInst = mapInstanceRef.current;
-        const pt = mapInst.latLngToLayerPoint(L.latLng(node.lat, node.lng));
-        const metersPerPixel =
-          (40075016.686 * Math.abs(Math.cos((node.lat * Math.PI) / 180))) /
-          Math.pow(2, mapInst.getZoom() + 8);
-        const r = node.currentRadius / metersPerPixel;
+      // Add memory circles with place-scale radii
+      memoriesRef.current.forEach((memory) => {
+        const radius = getPlaceScaleRadius(memory);
         subpaths.push(
-          `M ${pt.x + r} ${pt.y} a ${r} ${r} 0 1 0 ${-2 * r} 0 a ${r} ${r} 0 1 0 ${2 * r} 0 Z`
+          createCircleSubpath(
+            mapInstanceRef.current!,
+            memory.lat,
+            memory.lng,
+            radius
+          )
         );
+      });
+
+      // Add route corridors between chronological nearby pairs
+      const pairs = buildChronologicalPairs(
+        mapInstanceRef.current,
+        memoriesRef.current,
+        400
+      );
+      pairs.forEach(([a, b]) => {
+        const routePoints = buildFallbackRoutePoints(a, b);
+        const corridorPath = routeCorridorToSubpath(
+          mapInstanceRef.current!,
+          routePoints,
+          50
+        );
+        if (corridorPath) {
+          subpaths.push(corridorPath);
+        }
       });
 
       if (subpaths.length === 0) {
