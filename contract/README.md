@@ -47,6 +47,28 @@ event MemoryCreated(
 );
 ```
 
+## Matjip Karma Demo
+
+`MockKarma` is a demo-only soulbound token that mirrors the Status Karma
+experience while third-party app reward minting is not available. The deploy
+script deploys `MockKarma`, then `MemoryRegistry`, then sets the registry as
+the only minter.
+
+When `createMemory` creates a connected group of 5 unclaimed memories within a
+250m chain, `MemoryRegistry` mints 3 Matjip Karma to the wallet that added the
+triggering memory. Claimed memories can still connect future groups, but each
+memory only counts toward one reward.
+
+Set both frontend addresses after deployment:
+
+```shell
+NEXT_PUBLIC_MOCK_KARMA_ADDRESS=<deployed_mock_karma_address>
+NEXT_PUBLIC_MEMORY_REGISTRY_ADDRESS=<deployed_contract_address>
+```
+
+Matjip Karma is not official Status Karma and does not control real sequencer
+gasless eligibility.
+
 ## Status Hoodi
 
 Karma and gasless eligibility are handled by Status Network, not by this
@@ -69,9 +91,10 @@ PRIVATE_KEY=
 HOODI_RPC_URL=
 ```
 
-After deployment, set this in the web app:
+After deployment, set these in the web app:
 
 ```shell
+NEXT_PUBLIC_MOCK_KARMA_ADDRESS=<deployed_mock_karma_address>
 NEXT_PUBLIC_MEMORY_REGISTRY_ADDRESS=<deployed_contract_address>
 ```
 
