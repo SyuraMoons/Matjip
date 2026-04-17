@@ -1,8 +1,9 @@
 "use client";
 
 import { useAppKitAccount, useAppKitNetwork } from "@reown/appkit/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatUnits } from "viem";
+import type { KarmaRewardProgress } from "@/lib/karmaProgress";
 import { STATUS_HOODI_CHAIN_ID, statusHoodiNetwork } from "@/lib/wallet/config";
 
 type KarmaInfo = {
@@ -12,7 +13,15 @@ type KarmaInfo = {
   tierName: string;
   txPerEpoch: number;
   gaslessEligible: boolean;
+  source: "official" | "matjip";
 };
+
+type WalletStatusProps = {
+  refreshNonce?: number;
+  rewardProgress?: KarmaRewardProgress;
+};
+
+const MATJIP_REWARD_AMOUNT = BigInt(3) * BigInt(10) ** BigInt(18);
 
 function shortAddress(address: string) {
   return `${address.slice(0, 6)}...${address.slice(-4)}`;
@@ -26,19 +35,29 @@ function formatKarmaBalance(balance: string) {
   return trimmedFraction ? `${whole}.${trimmedFraction}` : whole;
 }
 
-export default function WalletStatus() {
+export default function WalletStatus({
+  refreshNonce = 0,
+  rewardProgress = { count: 0, target: 5 },
+}: WalletStatusProps) {
   const { address, isConnected } = useAppKitAccount({ namespace: "eip155" });
   const { chainId, switchNetwork } = useAppKitNetwork();
   const [karmaInfo, setKarmaInfo] = useState<KarmaInfo | null>(null);
   const [karmaError, setKarmaError] = useState("");
   const [isLoadingKarma, setIsLoadingKarma] = useState(false);
   const [isSwitching, setIsSwitching] = useState(false);
+  const [rewardMessage, setRewardMessage] = useState("");
+  const previousKarmaBalanceRef = useRef<bigint | null>(null);
 
   const isOnStatusHoodi = Number(chainId) === STATUS_HOODI_CHAIN_ID;
   const addressLabel = useMemo(
     () => (address ? shortAddress(address) : ""),
     [address]
   );
+
+  useEffect(() => {
+    previousKarmaBalanceRef.current = null;
+    setRewardMessage("");
+  }, [address]);
 
   useEffect(() => {
     let isCancelled = false;
@@ -61,8 +80,23 @@ export default function WalletStatus() {
           throw new Error(payload.error || "Unable to read Karma tier");
         }
 
+        const nextKarmaInfo = payload as KarmaInfo;
+        const nextBalance = BigInt(nextKarmaInfo.karmaBalance);
+        const previousBalance = previousKarmaBalanceRef.current;
+
         if (!isCancelled) {
-          setKarmaInfo(payload as KarmaInfo);
+          if (
+            nextKarmaInfo.source === "matjip" &&
+            previousBalance !== null &&
+            nextBalance - previousBalance >= MATJIP_REWARD_AMOUNT
+          ) {
+            setRewardMessage("+3 Matjip Karma awarded");
+          } else if (refreshNonce > 0 && nextKarmaInfo.source === "matjip") {
+            setRewardMessage("Memory saved. Connected progress updated.");
+          }
+
+          previousKarmaBalanceRef.current = nextBalance;
+          setKarmaInfo(nextKarmaInfo);
         }
       } catch (error) {
         if (!isCancelled) {
@@ -83,7 +117,14 @@ export default function WalletStatus() {
     return () => {
       isCancelled = true;
     };
-  }, [address, isConnected]);
+  }, [address, isConnected, refreshNonce]);
+
+  useEffect(() => {
+    if (!rewardMessage) return;
+
+    const timeout = setTimeout(() => setRewardMessage(""), 6000);
+    return () => clearTimeout(timeout);
+  }, [rewardMessage]);
 
   const handleSwitchNetwork = async () => {
     setIsSwitching(true);
@@ -132,7 +173,7 @@ export default function WalletStatus() {
 
           {isOnStatusHoodi && (
             <div className="mt-2 border-t border-purple-500/20 pt-2 text-gray-300">
-              {isLoadingKarma && <div>Karma loading...</div>}
+              {isLoadingKarma && <div>Refreshing Karma...</div>}
               {karmaError && (
                 <div className="text-amber-300">
                   Karma unavailable: {karmaError}
@@ -140,9 +181,15 @@ export default function WalletStatus() {
               )}
               {karmaInfo && (
                 <>
-                  <div>Total Karma: {formatKarmaBalance(karmaInfo.karmaBalance)}</div>
+                  <div className="font-semibold text-white">
+                    {karmaInfo.source === "matjip" ? "Matjip Karma" : "Official Karma"}:{" "}
+                    {formatKarmaBalance(karmaInfo.karmaBalance)}
+                  </div>
                   <div>Tier: {karmaInfo.tierName || "Unknown"}</div>
-                  <div>Quota: {karmaInfo.txPerEpoch} tx / epoch</div>
+                  <div>
+                    {karmaInfo.source === "matjip" ? "Demo quota" : "Quota"}:{" "}
+                    {karmaInfo.txPerEpoch} tx / epoch
+                  </div>
                   <div
                     className={
                       karmaInfo.gaslessEligible
@@ -151,8 +198,46 @@ export default function WalletStatus() {
                     }
                   >
                     {karmaInfo.gaslessEligible
-                      ? "Gasless eligible"
-                      : "No Karma yet"}
+                      ? karmaInfo.source === "matjip"
+                        ? "Demo reward tier"
+                        : "Gasless eligible"
+                      : karmaInfo.source === "matjip"
+                        ? "No Matjip Karma yet"
+                        : "No official Karma yet"}
+                  </div>
+                  {karmaInfo.source === "matjip" && (
+                    <div className="mt-2 rounded-md border border-emerald-500/20 bg-emerald-500/10 p-2 text-left">
+                      <div className="flex items-center justify-between text-[11px] text-emerald-200">
+                        <span>Connected progress</span>
+                        <span>
+                          {rewardProgress.count}/{rewardProgress.target}
+                        </span>
+                      </div>
+                      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-gray-800">
+                        <div
+                          className="h-full rounded-full bg-emerald-400 transition-all"
+                          style={{
+                            width: `${Math.min(
+                              100,
+                              (rewardProgress.count / rewardProgress.target) * 100
+                            )}%`,
+                          }}
+                        />
+                      </div>
+                      <div className="mt-1 text-[11px] leading-snug text-gray-300">
+                        Earn +3 when 5 connected memories reveal a larger area.
+                      </div>
+                    </div>
+                  )}
+                  {rewardMessage && (
+                    <div className="mt-2 rounded-md border border-emerald-400/30 bg-emerald-400/10 px-2 py-1 text-emerald-200">
+                      {rewardMessage}
+                    </div>
+                  )}
+                  <div className="mt-1 text-[11px] leading-snug text-gray-400">
+                    {karmaInfo.source === "matjip"
+                      ? "Demo soulbound Karma mirrors Status tiers; official Status Karma still controls real gasless eligibility."
+                      : "Memory activity may update after Status processes network usage."}
                   </div>
                 </>
               )}

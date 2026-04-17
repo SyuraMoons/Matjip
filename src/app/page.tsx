@@ -6,6 +6,7 @@ import { useDisconnect } from "@reown/appkit-controllers/react";
 import MapWrapper from "@/components/MapWrapper";
 import WalletStatus from "@/components/WalletStatus";
 import SignInPage from "@/components/SignInPage";
+import type { KarmaRewardProgress } from "@/lib/karmaProgress";
 
 function TileButton({
   onClick,
@@ -66,6 +67,12 @@ function InitialLoader() {
 export default function Home() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isInitializing, setIsInitializing] = useState(true);
+  const [karmaRefreshNonce, setKarmaRefreshNonce] = useState(0);
+  const [karmaRewardProgress, setKarmaRewardProgress] =
+    useState<KarmaRewardProgress>({
+      count: 0,
+      target: 5,
+    });
   const { isConnected } = useAppKitAccount({ namespace: "eip155" });
   const { disconnect } = useDisconnect();
 
@@ -85,7 +92,12 @@ export default function Home() {
   return (
     <div className="relative w-full h-screen overflow-hidden bg-[#efe3c3]">
       {/* Full-screen map */}
-      <MapWrapper isModalOpen={isModalOpen} setIsModalOpen={setIsModalOpen} />
+      <MapWrapper
+        isModalOpen={isModalOpen}
+        setIsModalOpen={setIsModalOpen}
+        onMemoryConfirmed={() => setKarmaRefreshNonce((nonce) => nonce + 1)}
+        onRewardProgressChange={setKarmaRewardProgress}
+      />
 
       {/* Header overlay */}
       <div className="absolute top-0 left-0 right-0 z-[1000] flex items-start justify-between gap-4 px-6 py-4 pointer-events-none">
@@ -98,7 +110,10 @@ export default function Home() {
           </p>
         </div>
         <div className="flex flex-col items-end gap-3">
-          <WalletStatus />
+          <WalletStatus
+            refreshNonce={karmaRefreshNonce}
+            rewardProgress={karmaRewardProgress}
+          />
           <div className="flex flex-col items-end gap-2">
             <TileButton
               onClick={() => setIsModalOpen(true)}

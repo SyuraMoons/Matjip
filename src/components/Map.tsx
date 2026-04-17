@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useAppKitAccount } from "@reown/appkit/react";
 import L from "leaflet";
 import type { Address } from "viem";
@@ -10,7 +10,12 @@ import type { MemoryData } from "./AddMemoryModal";
 import {
   decentralizedMemoryToMapMemory,
   loadDecentralizedMemories,
+  loadKarmaProgressMemories,
 } from "@/lib/decentralizedMemories";
+import {
+  calculateKarmaRewardProgress,
+  type KarmaRewardProgress,
+} from "@/lib/karmaProgress";
 
 // Fix default marker icons broken by webpack
 delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
@@ -298,9 +303,13 @@ function MemoryDetailModal({
 export default function Map({
   isModalOpen,
   setIsModalOpen,
+  onMemoryConfirmed,
+  onRewardProgressChange,
 }: {
   isModalOpen: boolean;
   setIsModalOpen: (value: boolean) => void;
+  onMemoryConfirmed?: () => void;
+  onRewardProgressChange?: (progress: KarmaRewardProgress) => void;
 }) {
   const mapRef = useRef<HTMLDivElement>(null);
   const mapInstanceRef = useRef<L.Map | null>(null);
@@ -317,6 +326,13 @@ export default function Map({
   const [isLoadingMemories, setIsLoadingMemories] = useState(false);
   const [memoryLoadError, setMemoryLoadError] = useState("");
   const memoriesRef = useRef<MemoryData[]>([]);
+
+  const publishRewardProgress = useCallback(
+    (progress: KarmaRewardProgress) => {
+      onRewardProgressChange?.(progress);
+    },
+    [onRewardProgressChange]
+  );
 
   // Keep memoriesRef in sync with memories state
   useEffect(() => {
@@ -771,12 +787,20 @@ export default function Map({
     };
   }, []);
 
+  const reloadRewardProgress = useCallback(async () => {
+    const progressMemories = await loadKarmaProgressMemories();
+    publishRewardProgress(calculateKarmaRewardProgress(progressMemories));
+  }, [publishRewardProgress]);
+
   const reloadMemories = async (poster: Address) => {
     setIsLoadingMemories(true);
     setMemoryLoadError("");
 
     try {
-      const loaded = await loadDecentralizedMemories({ poster });
+      const [loaded] = await Promise.all([
+        loadDecentralizedMemories({ poster }),
+        reloadRewardProgress(),
+      ]);
       setMemories(loaded.map(decentralizedMemoryToMapMemory));
     } catch (error) {
       setMemoryLoadError(
@@ -792,6 +816,7 @@ export default function Map({
       setMemories([]);
       setIsLoadingMemories(false);
       setMemoryLoadError("");
+      publishRewardProgress({ count: 0, target: 5 });
       return;
     }
 
@@ -802,12 +827,16 @@ export default function Map({
       setMemoryLoadError("");
 
       try {
-        const loaded = await loadDecentralizedMemories({
-          poster: address as Address,
-        });
+        const [loaded, progressMemories] = await Promise.all([
+          loadDecentralizedMemories({
+            poster: address as Address,
+          }),
+          loadKarmaProgressMemories(),
+        ]);
 
         if (!isCurrent) return;
         setMemories(loaded.map(decentralizedMemoryToMapMemory));
+        publishRewardProgress(calculateKarmaRewardProgress(progressMemories));
       } catch (error) {
         if (!isCurrent) return;
         setMemoryLoadError(
@@ -825,7 +854,7 @@ export default function Map({
     return () => {
       isCurrent = false;
     };
-  }, [address, isConnected]);
+  }, [address, isConnected, publishRewardProgress]);
 
   // Update markers when memories change
   useEffect(() => {
@@ -938,6 +967,7 @@ export default function Map({
         isOpen={isModalOpen}
         onClose={() => setIsModalOpen(false)}
         onSave={handleSaveMemory}
+        onMemoryConfirmed={onMemoryConfirmed}
         currentLocation={userLocationRef.current ? { lat: userLocationRef.current.lat, lng: userLocationRef.current.lng } : undefined}
       />
 

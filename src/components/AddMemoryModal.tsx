@@ -5,7 +5,7 @@ import { waitForTransactionReceipt } from "@wagmi/core";
 import { useAppKitAccount, useAppKitNetwork } from "@reown/appkit/react";
 import L from "leaflet";
 import { useWriteContract } from "wagmi";
-import type { Hash } from "viem";
+import { formatEther, type Hash } from "viem";
 import { ipfsToGatewayUrl } from "@/lib/ipfs";
 import { STATUS_HOODI_CHAIN_ID, wagmiConfig } from "@/lib/wallet/config";
 import { memoryRegistryContract } from "@/lib/wallet/memoryRegistry";
@@ -30,6 +30,7 @@ export type MemoryData = {
 type KarmaInfo = {
   karmaBalance: string;
   gaslessEligible: boolean;
+  source: "official" | "matjip";
 };
 
 type UploadedMemory = {
@@ -50,15 +51,49 @@ type AddMemoryModalProps = {
   isOpen: boolean;
   onClose: () => void;
   onSave: (memory: MemoryData) => void;
+  onMemoryConfirmed?: () => void;
   currentLocation?: { lat: number; lng: number };
 };
 
-type SubmitStep = "idle" | "karma" | "uploading" | "wallet" | "confirming" | "saved";
+type SubmitStep =
+  | "idle"
+  | "karma"
+  | "uploading"
+  | "estimating"
+  | "wallet"
+  | "confirming"
+  | "saved";
+
+type CreateMemoryArgs = readonly [
+  metadataCid: string,
+  metadataHash: `0x${string}`,
+  latE6: number,
+  lngE6: number,
+];
+
+type PreparedMemorySave = {
+  uploaded: UploadedMemory;
+  createMemoryArgs: CreateMemoryArgs;
+  estimatedGas: Awaited<ReturnType<typeof estimateCreateMemoryGas>>;
+  feeCapLabel: string;
+  isGaslessEstimate: boolean;
+};
+
+function formatFeeCap(wei: bigint) {
+  if (wei === BigInt(0)) {
+    return "0 ETH";
+  }
+
+  return `${Number(formatEther(wei)).toLocaleString(undefined, {
+    maximumSignificantDigits: 4,
+  })} ETH`;
+}
 
 export default function AddMemoryModal({
   isOpen,
   onClose,
   onSave,
+  onMemoryConfirmed,
   currentLocation,
 }: AddMemoryModalProps) {
   const { address, isConnected } = useAppKitAccount({ namespace: "eip155" });
@@ -79,7 +114,11 @@ export default function AddMemoryModal({
   const [manualLocation, setManualLocation] = useState("");
   const [submitStep, setSubmitStep] = useState<SubmitStep>("idle");
   const [submitError, setSubmitError] = useState("");
+  const [submitNotice, setSubmitNotice] = useState("");
   const [uploadedMemory, setUploadedMemory] = useState<UploadedMemory | null>(
+    null
+  );
+  const [preparedSave, setPreparedSave] = useState<PreparedMemorySave | null>(
     null
   );
   const [selectedEmoji, setSelectedEmoji] = useState("📍");
@@ -271,6 +310,12 @@ export default function AddMemoryModal({
     };
   }, []);
 
+  useEffect(() => {
+    if (!uploadedMemory) {
+      setPreparedSave(null);
+    }
+  }, [uploadedMemory]);
+
   const initMapPicker = () => {
     if (!mapPickerRef.current || mapInstanceRef.current) return;
 
@@ -354,15 +399,26 @@ export default function AddMemoryModal({
     }
 
     setSubmitStep("karma");
-    const response = await fetch(`/api/karma/${address}`);
-    const karmaInfo = (await response.json()) as KarmaInfo & { error?: string };
+    try {
+      const response = await fetch(`/api/karma/${address}`);
+      const karmaInfo = (await response.json()) as KarmaInfo & { error?: string };
 
-    if (!response.ok) {
-      throw new Error(karmaInfo.error || "Unable to check Karma");
-    }
+      if (!response.ok) {
+        throw new Error(karmaInfo.error || "Unable to check Karma");
+      }
 
-    if (!karmaInfo.gaslessEligible || BigInt(karmaInfo.karmaBalance) <= BigInt(0)) {
-      throw new Error("You need Karma on this wallet to add a memory");
+      if (!karmaInfo.gaslessEligible || BigInt(karmaInfo.karmaBalance) <= BigInt(0)) {
+        setSubmitNotice(
+          karmaInfo.source === "matjip"
+            ? "No Matjip Karma yet. Add connected memories to earn demo Karma."
+            : "No official Status Karma found yet. The wallet can still submit; fees are estimated from Status Network."
+        );
+      }
+    } catch (error) {
+      console.warn("Unable to read Karma before memory save", error);
+      setSubmitNotice(
+        "Karma is unavailable right now. The wallet can still submit if Status Network accepts the transaction."
+      );
     }
   };
 
@@ -398,9 +454,11 @@ export default function AddMemoryModal({
     return payload;
   };
 
-  const handleSave = async () => {
+  const prepareSave = async () => {
     try {
       setSubmitError("");
+      setSubmitNotice("");
+      setPreparedSave(null);
       await assertCanSubmit();
       const uploaded = await uploadMemory();
       const createMemoryArgs = [
@@ -410,13 +468,64 @@ export default function AddMemoryModal({
         uploaded.contractArgs.lngE6,
       ] as const;
 
+      setSubmitStep("estimating");
+      const estimatedGas = await estimateCreateMemoryGas(
+        address as `0x${string}`,
+        createMemoryArgs
+      );
+      const isGaslessEstimate =
+        estimatedGas.maxFeePerGas === BigInt(0) &&
+        estimatedGas.maxPriorityFeePerGas === BigInt(0);
+      const feeCapLabel = formatFeeCap(
+        estimatedGas.gas * estimatedGas.maxFeePerGas
+      );
+
+      setPreparedSave({
+        uploaded,
+        createMemoryArgs,
+        estimatedGas,
+        feeCapLabel,
+        isGaslessEstimate,
+      });
+      setSubmitStep("idle");
+
+      if (isGaslessEstimate) {
+        setSubmitNotice(
+          "This memory may help complete a 5-memory connected area. Status estimates this save as gasless; continue with the current wallet confirmation for now."
+        );
+      } else {
+        setSubmitNotice(
+          "This memory may help complete a 5-memory connected area. Choose the premium fee path to continue now."
+        );
+      }
+    } catch (error) {
+      setSubmitStep("idle");
+      setSubmitError(
+        error instanceof Error ? error.message : "Unable to prepare memory save"
+      );
+    }
+  };
+
+  const confirmPremiumSave = async () => {
+    if (!preparedSave) {
+      await prepareSave();
+      return;
+    }
+
+    try {
+      setSubmitError("");
       setSubmitStep("wallet");
-      const estimatedGas = await estimateCreateMemoryGas(address as `0x${string}`, createMemoryArgs);
+      setSubmitNotice(
+        preparedSave.isGaslessEstimate
+          ? "Confirm the current wallet transaction. Status Network estimated a zero fee for this sender."
+          : "Confirm the premium fee transaction in your wallet."
+      );
+
       const txHash = await writeContractAsync({
         ...memoryRegistryContract,
         functionName: "createMemory",
-        args: createMemoryArgs,
-        ...estimatedGas,
+        args: preparedSave.createMemoryArgs,
+        ...preparedSave.estimatedGas,
       });
 
       setSubmitStep("confirming");
@@ -441,14 +550,18 @@ export default function AddMemoryModal({
         location: manualLocation || "Unknown Location",
         lat: locationCoords.lat,
         lng: locationCoords.lng,
-        photos: uploaded.imageCids.map(ipfsToGatewayUrl),
+        photos: preparedSave.uploaded.imageCids.map(ipfsToGatewayUrl),
         emoji: selectedEmoji || "📍",
-        metadataCid: uploaded.metadataCid,
-        metadataHash: uploaded.metadataHash,
+        metadataCid: preparedSave.uploaded.metadataCid,
+        metadataHash: preparedSave.uploaded.metadataHash,
         txHash,
       };
 
       setSubmitStep("saved");
+      setSubmitNotice(
+        "Memory saved. Refreshing Matjip Karma and connected-memory progress."
+      );
+      onMemoryConfirmed?.();
       onSave(newMemory);
       resetForm();
       onClose();
@@ -470,7 +583,9 @@ export default function AddMemoryModal({
     setManualLocation("");
     setSubmitStep("idle");
     setSubmitError("");
+    setSubmitNotice("");
     setUploadedMemory(null);
+    setPreparedSave(null);
     setShowSuggestions(false);
     setLocationSearchResults([]);
     
@@ -491,13 +606,17 @@ export default function AddMemoryModal({
       ? "Checking Karma..."
       : submitStep === "uploading"
         ? "Uploading..."
+        : submitStep === "estimating"
+          ? "Estimating Fee..."
         : submitStep === "wallet"
           ? "Confirm in Wallet"
           : submitStep === "confirming"
             ? "Saving Onchain..."
             : submitStep === "saved"
               ? "Saved"
-              : uploadedMemory
+              : preparedSave
+                ? "Refresh Fee Estimate"
+                : uploadedMemory
                 ? "Retry Onchain Save"
                 : "💾 Save Memory";
 
@@ -703,14 +822,60 @@ export default function AddMemoryModal({
             </div>
           )}
 
-          {(submitError || uploadedMemory || isSubmitting) && (
+          {(submitError || submitNotice || uploadedMemory || isSubmitting) && (
             <div className="mt-6 rounded-lg border border-purple-500/30 bg-slate-950/70 p-3 text-sm text-gray-200">
               {isSubmitting && <p>{saveButtonLabel}</p>}
+              {submitNotice && (
+                <p className="mt-2 text-emerald-200">{submitNotice}</p>
+              )}
               {uploadedMemory && !isSubmitting && (
                 <p>
                   Uploaded to Pinata. If the wallet transaction failed, you can
                   retry without uploading again.
                 </p>
+              )}
+              {preparedSave && !isSubmitting && (
+                <div className="mt-3 space-y-3">
+                  <div className="rounded-lg border border-purple-500/30 bg-slate-900/80 p-3">
+                    <p className="text-xs uppercase tracking-[0.16em] text-gray-400">
+                      Status fee estimate
+                    </p>
+                    <p className="mt-1 text-gray-100">
+                      {preparedSave.isGaslessEstimate
+                        ? "Gasless estimate returned"
+                        : `Premium fee cap: ${preparedSave.feeCapLabel}`}
+                    </p>
+                    <p className="mt-1 text-xs text-gray-400">
+                      Built from linea_estimateGas with your wallet as the sender.
+                    </p>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <button
+                      type="button"
+                      onClick={confirmPremiumSave}
+                      className="rounded-lg bg-purple-600 px-4 py-3 text-left text-sm font-medium text-white transition hover:bg-purple-700"
+                    >
+                      <span className="block">
+                        {preparedSave.isGaslessEstimate
+                          ? "Continue in wallet"
+                          : "Pay premium fee"}
+                      </span>
+                      <span className="mt-1 block text-xs font-normal text-purple-100">
+                        Available now with the current wallet flow.
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled
+                      className="rounded-lg border border-purple-500/30 bg-slate-800 px-4 py-3 text-left text-sm font-medium text-gray-400"
+                    >
+                      <span className="block">Gasless UX</span>
+                      <span className="mt-1 block text-xs font-normal text-gray-500">
+                        Coming soon.
+                      </span>
+                    </button>
+                  </div>
+                </div>
               )}
               {submitError && (
                 <p className="mt-2 text-amber-300">{submitError}</p>
@@ -747,7 +912,7 @@ export default function AddMemoryModal({
             onClick={() => {
               if (step === "photos" && photos.length > 0) setStep("details");
               else if (step === "details" && title) setStep("location");
-              else if (step === "location" && locationCoords) handleSave();
+              else if (step === "location" && locationCoords) prepareSave();
             }}
             className={`px-6 py-2 rounded-lg font-medium transition ${
               (step === "photos" && photos.length === 0) ||
