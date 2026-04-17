@@ -29,6 +29,108 @@ L.Icon.Default.mergeOptions({
 
 type RouteCache = Record<string, [number, number][]>;
 
+// Union-Find data structure for connected component detection
+class UnionFind {
+  parent: globalThis.Map<number, number>;
+
+  constructor(ids: number[]) {
+    this.parent = new globalThis.Map();
+    ids.forEach((id) => this.parent.set(id, id));
+  }
+
+  find(x: number): number {
+    if (!this.parent.has(x)) return x;
+    const parent = this.parent.get(x)!;
+    if (parent !== x) {
+      this.parent.set(x, this.find(parent));
+    }
+    return this.parent.get(x)!;
+  }
+
+  union(x: number, y: number) {
+    const px = this.find(x);
+    const py = this.find(y);
+    if (px !== py) {
+      this.parent.set(px, py);
+    }
+  }
+}
+
+// Build connected groups from route pairs
+function buildConnectedGroups(
+  memories: MemoryData[],
+  pairs: Array<[MemoryData, MemoryData]>
+): MemoryData[][] {
+  // Deduplicate input memories by id first to prevent duplicate counting
+  const uniqueMemoriesMap = new globalThis.Map<number, MemoryData>();
+  for (const memory of memories) {
+    uniqueMemoriesMap.set(memory.id, memory);
+  }
+  const uniqueMemories = Array.from(uniqueMemoriesMap.values());
+
+  const uf = new UnionFind(uniqueMemories.map((m) => m.id));
+
+  for (const [a, b] of pairs) {
+    uf.union(a.id, b.id);
+  }
+
+  const groups = new globalThis.Map<number, MemoryData[]>();
+  for (const memory of uniqueMemories) {
+    const root = uf.find(memory.id);
+    if (!groups.has(root)) {
+      groups.set(root, []);
+    }
+    groups.get(root)!.push(memory);
+  }
+
+  return Array.from(groups.values());
+}
+
+// Compute enclosing aura that covers all pins in a connected group
+function computeEnclosingGroupAura(
+  map: L.Map,
+  group: MemoryData[],
+  paddingMeters = 120
+): { center: [number, number]; radiusMeters: number; karma: number } {
+  if (group.length === 0) {
+    return { center: [0, 0], radiusMeters: 0, karma: 0 };
+  }
+
+  // Deduplicate group by id to get unique memories only
+  const uniqueMemoriesMap = new globalThis.Map<number, MemoryData>();
+  for (const memory of group) {
+    uniqueMemoriesMap.set(memory.id, memory);
+  }
+  const uniqueGroup = Array.from(uniqueMemoriesMap.values());
+
+  if (uniqueGroup.length === 0) {
+    return { center: [0, 0], radiusMeters: 0, karma: 0 };
+  }
+
+  // Compute bounds using Leaflet's latLngBounds for accurate enclosing geometry
+  const bounds = L.latLngBounds(
+    uniqueGroup.map((m) => [m.lat, m.lng] as [number, number])
+  );
+
+  // Get center from bounds (more robust than manual calculation)
+  const boundsCenter = bounds.getCenter();
+  const center: [number, number] = [boundsCenter.lat, boundsCenter.lng];
+
+  // Compute radius as max distance from center to any member + padding
+  // This guarantees all members are inside the circle
+  let maxDistanceMeters = 0;
+  for (const memory of uniqueGroup) {
+    const dist = map.distance(center, [memory.lat, memory.lng]);
+    maxDistanceMeters = Math.max(maxDistanceMeters, dist);
+  }
+
+  return {
+    center,
+    radiusMeters: maxDistanceMeters + paddingMeters,
+    karma: uniqueGroup.length,
+  };
+}
+
 function getPlaceScaleRadius(memory: MemoryData): number {
   const text = `${memory.title} ${memory.location} ${memory.caption}`.toLowerCase();
 
@@ -553,6 +655,8 @@ export default function Map({
   const updateStreetsMaskRef = useRef<(() => void) | null>(null);
   const routePointsRef = useRef<RouteCache>({});
   const routeFetchNonceRef = useRef(0);
+  const karmaAuraLayersRef = useRef<L.Circle[]>([]);
+  const karmaBadgesRef = useRef<L.Marker[]>([]);
   const { address, isConnected } = useAppKitAccount({ namespace: "eip155" });
 
   const [memories, setMemories] = useState<MemoryData[]>([]);
@@ -635,6 +739,95 @@ export default function Map({
     document.addEventListener("click", handleReadMoreClick);
     return () => document.removeEventListener("click", handleReadMoreClick);
   }, []);
+
+  // Render karma group auras (transparent circles showing connected groups and their karma count)
+  const renderKarmaAuras = (
+    map: L.Map,
+    memories: MemoryData[],
+    pairs: Array<[MemoryData, MemoryData]>
+  ) => {
+    // Clear old auras and badges
+    karmaAuraLayersRef.current.forEach((circle) => map.removeLayer(circle));
+    karmaAuraLayersRef.current = [];
+
+    karmaBadgesRef.current.forEach((badge) => map.removeLayer(badge));
+    karmaBadgesRef.current = [];
+
+    if (memories.length === 0) return;
+
+    // Build connected groups
+    const groups = buildConnectedGroups(memories, pairs);
+
+    // Render auras only for groups with 2+ unique pins
+    for (const group of groups) {
+      // Deduplicate to get unique count
+      const uniqueMemoriesMap = new globalThis.Map<number, MemoryData>();
+      for (const memory of group) {
+        uniqueMemoriesMap.set(memory.id, memory);
+      }
+      const uniqueGroup = Array.from(uniqueMemoriesMap.values());
+
+      // Only render if 2+ unique members
+      if (uniqueGroup.length < 2) continue;
+
+      const { center, radiusMeters, karma } = computeEnclosingGroupAura(map, group, 120);
+
+      // Create aura circle - NOT part of clipPath, just a visual overlay
+      // Guaranteed to enclose all pins in the group (using Leaflet bounds)
+      const aura = L.circle(center, {
+        radius: radiusMeters,
+        color: "rgba(139, 92, 246, 0.25)",
+        fill: true,
+        fillColor: "rgba(139, 92, 246, 0.08)",
+        fillOpacity: 0.08,
+        weight: 1.5,
+        opacity: 0.25,
+        interactive: false,
+        pane: "overlayPane",
+      }).addTo(map);
+
+      karmaAuraLayersRef.current.push(aura);
+
+      // Create karma badge showing exact group karma count (= unique members)
+      const badgeIcon = L.divIcon({
+        className: "",
+        html: `
+          <div style="
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: rgba(139, 92, 246, 0.15);
+            border: 1.5px solid rgba(139, 92, 246, 0.4);
+            font-size: 12px;
+            font-weight: 700;
+            color: rgba(139, 92, 246, 0.9);
+            box-shadow: 0 0 12px rgba(139, 92, 246, 0.2);
+            text-align: center;
+            line-height: 1;
+          ">
+            ${karma}
+          </div>
+        `,
+        iconSize: [40, 40],
+        iconAnchor: [20, 20],
+      });
+
+      const badge = L.marker(center, {
+        icon: badgeIcon,
+        interactive: false,
+      }).addTo(map);
+
+      karmaBadgesRef.current.push(badge);
+
+      console.log(
+        `[Karma] Group aura: karma=${karma} (${uniqueGroup.length} unique members), center=[${center[0].toFixed(4)}, ${center[1].toFixed(4)}], radius=${radiusMeters.toFixed(0)}m`,
+        { members: uniqueGroup.map((m) => ({ id: m.id, title: m.title })) }
+      );
+    }
+  };
 
   useEffect(() => {
     if (!mapRef.current || mapInstanceRef.current) return;
@@ -1056,6 +1249,22 @@ export default function Map({
       mapContainer.removeEventListener("wheel", onWheel);
       cancelAnimationFrame(swzRafId);
       if (swzTimeoutId !== null) clearTimeout(swzTimeoutId);
+
+      // Clean up karma aura layers
+      karmaAuraLayersRef.current.forEach((circle) => {
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.removeLayer(circle);
+        }
+      });
+      karmaAuraLayersRef.current = [];
+
+      karmaBadgesRef.current.forEach((badge) => {
+        if (mapInstanceRef.current) {
+          mapInstanceRef.current.removeLayer(badge);
+        }
+      });
+      karmaBadgesRef.current = [];
+
       if (mapInstanceRef.current) {
         mapInstanceRef.current.remove();
         mapInstanceRef.current = null;
@@ -1152,6 +1361,12 @@ export default function Map({
       const nextCache: RouteCache = {};
 
       for (const [a, b] of pairs) {
+        // Skip pairs where start and end points are identical
+        if (a.lat === b.lat && a.lng === b.lng) {
+          console.log(`[Routes] Skipping identical point pair: ${a.id}`);
+          continue;
+        }
+
         const key = getRouteKey(a, b);
         const existing = routePointsRef.current[key];
 
@@ -1242,6 +1457,11 @@ export default function Map({
 
     // Add all current memories as markers
     memories.forEach((memory) => addMemoryMarker(memory, map));
+
+    // Render karma auras for connected groups
+    const pairs = buildChronologicalPairs(map, memories, 1500);
+    renderKarmaAuras(map, memories, pairs);
+
     updateStreetsMaskRef.current?.();
   }, [memories]);
 
