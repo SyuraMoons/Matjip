@@ -125,6 +125,7 @@ export default function AddMemoryModal({
   const [locationSearchResults, setLocationSearchResults] = useState<LocationResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [isMapLoaded, setIsMapLoaded] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragRef = useRef<HTMLDivElement>(null);
@@ -181,6 +182,24 @@ export default function AddMemoryModal({
     setUploadedMemory(null);
     setPhotos((prev) => prev.filter((_, i) => i !== index));
     setPhotoFiles((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const handleCloseModal = () => {
+    if (debounceTimerRef.current) {
+      clearTimeout(debounceTimerRef.current);
+    }
+
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.remove();
+      mapInstanceRef.current = null;
+    }
+
+    markerRef.current = null;
+    setIsMapLoaded(false);
+    setShowSuggestions(false);
+    setLocationSearchResults([]);
+
+    onClose();
   };
   // Debounced location search with auto-select first result
   const handleLocationInputChange = (query: string) => {
@@ -286,6 +305,25 @@ export default function AddMemoryModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step]);
 
+  // Clean up when modal closes
+  useEffect(() => {
+    if (!isOpen) {
+      if (debounceTimerRef.current) {
+        clearTimeout(debounceTimerRef.current);
+      }
+
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+
+      markerRef.current = null;
+      setIsMapLoaded(false);
+      setShowSuggestions(false);
+      setLocationSearchResults([]);
+    }
+  }, [isOpen]);
+
   // Close suggestions when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -327,6 +365,7 @@ export default function AddMemoryModal({
     });
 
     mapInstanceRef.current = pickerMap;
+    setIsMapLoaded(true);
 
     // Force map to recalculate size after initialization
     setTimeout(() => {
@@ -588,6 +627,7 @@ export default function AddMemoryModal({
     setPreparedSave(null);
     setShowSuggestions(false);
     setLocationSearchResults([]);
+    setIsMapLoaded(false);
     
     // Clear debounce timer
     if (debounceTimerRef.current) {
@@ -625,7 +665,11 @@ export default function AddMemoryModal({
   return (
     <div
       className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[9999] flex items-center justify-center p-4"
-      onClick={onClose}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          handleCloseModal();
+        }
+      }}
     >
       <div
         className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-2xl border border-purple-500/30 shadow-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto"
@@ -639,7 +683,7 @@ export default function AddMemoryModal({
             {step === "location" && "📍 Set Location"}
           </h2>
           <button
-            onClick={onClose}
+            onClick={handleCloseModal}
             className="text-gray-400 hover:text-gray-200 text-2xl transition"
           >
             ✕
@@ -800,7 +844,7 @@ export default function AddMemoryModal({
                     ref={mapPickerRef}
                     className="w-full h-72 rounded-lg border border-purple-500/30 overflow-hidden bg-slate-900"
                   />
-                  {!mapPickerRef.current?.childElementCount && (
+                  {!isMapLoaded && (
                     <button
                       onClick={initMapPicker}
                       className="mt-2 w-full bg-purple-600 hover:bg-purple-700 text-white py-2 rounded-lg transition"
@@ -890,7 +934,7 @@ export default function AddMemoryModal({
             onClick={() => {
               if (step === "details") setStep("photos");
               else if (step === "location") setStep("details");
-              else onClose();
+              else handleCloseModal();
             }}
             className="px-4 py-2 text-gray-300 hover:text-gray-100 transition"
           >

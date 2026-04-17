@@ -18,12 +18,202 @@ import {
 } from "@/lib/karmaProgress";
 
 // Fix default marker icons broken by webpack
-delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)._getIconUrl;
+delete (L.Icon.Default.prototype as unknown as Record<string, unknown>)
+  ._getIconUrl;
 L.Icon.Default.mergeOptions({
-  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  iconRetinaUrl:
+    "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
   iconUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
   shadowUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
 });
+
+type RouteCache = Record<string, [number, number][]>;
+
+function getPlaceScaleRadius(memory: MemoryData): number {
+  const text = `${memory.title} ${memory.location} ${memory.caption}`.toLowerCase();
+
+  const largeKeywords = [
+    "park",
+    "mountain",
+    "palace",
+    "castle",
+    "campus",
+    "forest",
+    "garden",
+  ];
+  const mediumKeywords = [
+    "museum",
+    "temple",
+    "mall",
+    "station",
+    "landmark",
+    "market",
+  ];
+  const smallKeywords = [
+    "cafe",
+    "coffee",
+    "restaurant",
+    "shop",
+    "store",
+    "bakery",
+    "bar",
+  ];
+
+  if (largeKeywords.some((k) => text.includes(k))) return 220;
+  if (mediumKeywords.some((k) => text.includes(k))) return 120;
+  if (smallKeywords.some((k) => text.includes(k))) return 60;
+
+  return 100;
+}
+
+function sortMemoriesChronologically(memories: MemoryData[]): MemoryData[] {
+  return [...memories].sort((a, b) => a.id - b.id);
+}
+
+function buildChronologicalPairs(
+  map: L.Map,
+  memories: MemoryData[],
+  thresholdMeters = 400
+): Array<[MemoryData, MemoryData]> {
+  const sorted = sortMemoriesChronologically(memories);
+  const pairs: Array<[MemoryData, MemoryData]> = [];
+
+  for (let i = 0; i < sorted.length - 1; i++) {
+    const a = sorted[i];
+    const b = sorted[i + 1];
+    const distance = map.distance([a.lat, a.lng], [b.lat, b.lng]);
+
+    if (distance <= thresholdMeters) {
+      pairs.push([a, b]);
+    }
+  }
+
+  return pairs;
+}
+
+// Fetch real route geometry from OSRM API following actual street network
+async function fetchRoutePoints(
+  a: MemoryData,
+  b: MemoryData
+): Promise<[number, number][]> {
+  try {
+    const params = new URLSearchParams({
+      startLat: String(a.lat),
+      startLng: String(a.lng),
+      endLat: String(b.lat),
+      endLng: String(b.lng),
+    });
+
+    const response = await fetch(`/api/routes/path?${params.toString()}`, {
+      cache: "no-store",
+    });
+
+    const data = await response.json();
+
+    if (
+      !response.ok ||
+      !Array.isArray(data?.points) ||
+      data.points.length < 2
+    ) {
+      // Honest fallback if route fails
+      return [
+        [a.lat, a.lng],
+        [b.lat, b.lng],
+      ];
+    }
+
+    return data.points as [number, number][];
+  } catch (error) {
+    console.error("fetchRoutePoints failed:", error);
+    return [
+      [a.lat, a.lng],
+      [b.lat, b.lng],
+    ];
+  }
+}
+
+// Create stable cache key for route pair
+function getRouteKey(a: MemoryData, b: MemoryData): string {
+  return `${a.id}__${b.id}`;
+}
+
+function routeCorridorToSubpath(
+  map: L.Map,
+  points: [number, number][],
+  corridorWidthMeters = 35
+): string {
+  if (points.length < 2) return "";
+
+  const layerPoints = points.map(([lat, lng]) =>
+    map.latLngToLayerPoint(L.latLng(lat, lng))
+  );
+
+  const corridorLeft: L.Point[] = [];
+  const corridorRight: L.Point[] = [];
+
+  for (let i = 0; i < layerPoints.length; i++) {
+    const curr = layerPoints[i];
+    const prev = i > 0 ? layerPoints[i - 1] : curr;
+    const next = i < layerPoints.length - 1 ? layerPoints[i + 1] : curr;
+
+    let dx = 0;
+    let dy = 0;
+
+    if (i === 0) {
+      dx = next.x - curr.x;
+      dy = next.y - curr.y;
+    } else if (i === layerPoints.length - 1) {
+      dx = curr.x - prev.x;
+      dy = curr.y - prev.y;
+    } else {
+      const v1x = curr.x - prev.x;
+      const v1y = curr.y - prev.y;
+      const v2x = next.x - curr.x;
+      const v2y = next.y - curr.y;
+      dx = v1x + v2x;
+      dy = v1y + v2y;
+    }
+
+    const len = Math.sqrt(dx * dx + dy * dy) || 1;
+    dx /= len;
+    dy /= len;
+
+    const lat = points[i][0];
+    const metersPerPixel =
+      (40075016.686 * Math.abs(Math.cos((lat * Math.PI) / 180))) /
+      Math.pow(2, map.getZoom() + 8);
+    const pixelWidth = corridorWidthMeters / metersPerPixel;
+
+    corridorLeft.push(L.point(curr.x - dy * pixelWidth, curr.y + dx * pixelWidth));
+    corridorRight.push(L.point(curr.x + dy * pixelWidth, curr.y - dx * pixelWidth));
+  }
+
+  let pathStr = `M ${corridorLeft[0].x} ${corridorLeft[0].y}`;
+  for (let i = 1; i < corridorLeft.length; i++) {
+    pathStr += ` L ${corridorLeft[i].x} ${corridorLeft[i].y}`;
+  }
+  for (let i = corridorRight.length - 1; i >= 0; i--) {
+    pathStr += ` L ${corridorRight[i].x} ${corridorRight[i].y}`;
+  }
+  pathStr += " Z";
+
+  return pathStr;
+}
+
+// Circle subpath for a memory pin with place-scale radius
+function createCircleSubpath(
+  map: L.Map,
+  lat: number,
+  lng: number,
+  radiusMeters: number
+): string {
+  const pt = map.latLngToLayerPoint(L.latLng(lat, lng));
+  const metersPerPixel =
+    (40075016.686 * Math.abs(Math.cos((lat * Math.PI) / 180))) /
+    Math.pow(2, map.getZoom() + 8);
+  const r = radiusMeters / metersPerPixel;
+  return `M ${pt.x + r} ${pt.y} a ${r} ${r} 0 1 0 ${-2 * r} 0 a ${r} ${r} 0 1 0 ${2 * r} 0 Z`;
+}
 
 function createMemoryIcon() {
   return L.divIcon({
@@ -317,6 +507,8 @@ export default function Map({
   const userLocationRef = useRef<L.LatLng | null>(null);
   const streetsPaneRef = useRef<HTMLElement | null>(null);
   const updateStreetsMaskRef = useRef<(() => void) | null>(null);
+  const routePointsRef = useRef<RouteCache>({});
+  const routeFetchNonceRef = useRef(0);
   const { address, isConnected } = useAppKitAccount({ namespace: "eip155" });
 
   const [memories, setMemories] = useState<MemoryData[]>([]);
@@ -624,32 +816,41 @@ export default function Map({
     new LocateControl({ position: "bottomright" }).addTo(map);
 
     // --- Visited-area system using clipPath masks ---
-    const VISITED_RADIUS_METERS = 100;
     let updateFrameId: number | null = null;
-
-    // Clip the streets pane to circles at the user's location and every
-    // memory, so the labelled Voyager tiles are only visible inside
-    // each visited radius. Uses an SVG path() so multiple circles can be
-    // combined in a single clip-path.
-    function circleSubpath(lat: number, lng: number): string {
-      const pt = map.latLngToLayerPoint(L.latLng(lat, lng));
-      const metersPerPixel =
-        (40075016.686 * Math.abs(Math.cos((lat * Math.PI) / 180))) /
-        Math.pow(2, map.getZoom() + 8);
-      const r = VISITED_RADIUS_METERS / metersPerPixel;
-      return `M ${pt.x + r} ${pt.y} a ${r} ${r} 0 1 0 ${-2 * r} 0 a ${r} ${r} 0 1 0 ${2 * r} 0 Z`;
-    }
 
     function updateStreetsMask() {
       const pane = streetsPaneRef.current;
-      if (!pane) return;
+      if (!pane || !mapInstanceRef.current) return;
+
+      const map = mapInstanceRef.current;
       const subpaths: string[] = [];
+
+      // Add user location circle (100m base)
       const loc = userLocationRef.current;
-      if (loc) subpaths.push(circleSubpath(loc.lat, loc.lng));
-      // Use current memories from ref, not hardcoded INITIAL_SAMPLE_MEMORIES
-      memoriesRef.current.forEach((m) =>
-        subpaths.push(circleSubpath(m.lat, m.lng))
-      );
+      if (loc) {
+        subpaths.push(createCircleSubpath(map, loc.lat, loc.lng, 100));
+      }
+
+      // Add memory circles with place-scale radii
+      memoriesRef.current.forEach((memory) => {
+        const radius = getPlaceScaleRadius(memory);
+        subpaths.push(createCircleSubpath(map, memory.lat, memory.lng, radius));
+      });
+
+      // Add route corridors between chronological nearby pairs using cached route geometry
+      const pairs = buildChronologicalPairs(map, memoriesRef.current, 400);
+      pairs.forEach(([a, b]) => {
+        const key = getRouteKey(a, b);
+        const points = routePointsRef.current[key];
+
+        if (points && points.length >= 2) {
+          const corridorPath = routeCorridorToSubpath(map, points, 35);
+          if (corridorPath) {
+            subpaths.push(corridorPath);
+          }
+        }
+      });
+
       if (subpaths.length === 0) {
         pane.style.clipPath = "circle(0px at 0px 0px)";
         return;
@@ -855,6 +1056,77 @@ export default function Map({
       isCurrent = false;
     };
   }, [address, isConnected, publishRewardProgress]);
+
+  // Fetch real route geometry when memories change
+  useEffect(() => {
+    if (!mapInstanceRef.current) return;
+
+    const map = mapInstanceRef.current;
+    let cancelled = false;
+    const nonce = ++routeFetchNonceRef.current;
+
+    async function loadRoutes() {
+      const pairs = buildChronologicalPairs(map, memories, 400);
+      const nextCache: RouteCache = {};
+
+      for (const [a, b] of pairs) {
+        const key = getRouteKey(a, b);
+        const existing = routePointsRef.current[key];
+
+        if (existing) {
+          nextCache[key] = existing;
+          continue;
+        }
+
+        const points = await fetchRoutePoints(a, b);
+        if (cancelled || routeFetchNonceRef.current !== nonce) return;
+        nextCache[key] = points;
+      }
+
+      if (cancelled || routeFetchNonceRef.current !== nonce) return;
+
+      routePointsRef.current = nextCache;
+
+      const pane = streetsPaneRef.current;
+      const mapNow = mapInstanceRef.current;
+      if (!pane || !mapNow) return;
+
+      const subpaths: string[] = [];
+
+      const loc = userLocationRef.current;
+      if (loc) {
+        subpaths.push(createCircleSubpath(mapNow, loc.lat, loc.lng, 100));
+      }
+
+      memoriesRef.current.forEach((memory) => {
+        const radius = getPlaceScaleRadius(memory);
+        subpaths.push(createCircleSubpath(mapNow, memory.lat, memory.lng, radius));
+      });
+
+      const routePairs = buildChronologicalPairs(mapNow, memoriesRef.current, 400);
+      routePairs.forEach(([a, b]) => {
+        const key = getRouteKey(a, b);
+        const points = routePointsRef.current[key];
+        if (points && points.length >= 2) {
+          const corridorPath = routeCorridorToSubpath(mapNow, points, 35);
+          if (corridorPath) {
+            subpaths.push(corridorPath);
+          }
+        }
+      });
+
+      pane.style.clipPath =
+        subpaths.length > 0
+          ? `path('${subpaths.join(" ")}')`
+          : "circle(0px at 0px 0px)";
+    }
+
+    loadRoutes();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [memories]);
 
   // Update markers when memories change
   useEffect(() => {
